@@ -40,8 +40,13 @@ export type UpdateChannel = "stable" | "canary";
 
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-/** Build service origin used when `PI_BUILD_URL` is unset. */
-export const DEFAULT_BUILD_URL = "https://build.stencil.so";
+/**
+ * Build service origin used when `PI_BUILD_URL` is unset.
+ *
+ * Fork: points at the static build index on this fork's `build-index` branch,
+ * so `omp update` installs the fork's own builds instead of upstream's.
+ */
+export const DEFAULT_BUILD_URL = "https://raw.githubusercontent.com/Grosser-Kurfuerst/oh-my-pi/build-index";
 
 /** The product omp's builds are published under. */
 const PRODUCT = "omp";

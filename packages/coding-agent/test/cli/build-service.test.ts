@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
 	type BuildHost,
+	DEFAULT_BUILD_URL,
 	fetchBuild,
 	isMuslLinuxForTest,
 	parseBuildAnswer,
@@ -168,7 +169,7 @@ describe("fetchBuild", () => {
 			},
 		);
 
-		expect(url).toBe("https://build.stencil.so/api/products/omp/versions/18.8.9/macos-arm64");
+		expect(url).toBe(`${DEFAULT_BUILD_URL}/api/products/omp/versions/18.8.9/macos-arm64`);
 	});
 
 	it("names the target when nothing is published for it", async () => {
