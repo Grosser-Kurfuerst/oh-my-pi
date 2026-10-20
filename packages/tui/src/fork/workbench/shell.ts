@@ -3,14 +3,14 @@
  * composer roots (`ui.children`) inside its own layout. Upstream components
  * are only read and rendered, never modified: the transcript and the roots
  * above it become a scrollable content area, the roots below it (HUDs,
- * editor, status line) stay pinned at the bottom.
+ * editor, status line) stay pinned at the bottom. A one-column rail beside
+ * the content marks every user prompt and jumps to it on click.
  *
  * While the shell owns the alternate screen the composer commits no native
  * history; closing it hands the normal buffer back and the composer catches up.
  */
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { stripPromptZones } from "../../chat/transcript-outline";
-import { UserMessageComponent } from "../../chat/user-message";
 import {
 	type AnimationFrame,
 	TranscriptContainer,
@@ -19,6 +19,7 @@ import {
 } from "../../chrome/transcript-container";
 import { ScrollView } from "../../components/scroll-view";
 import { getKeybindings } from "../../keybindings";
+import { matchesKey } from "../../keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../../mouse";
 import { isNativeRendering, onNativeRenderingChange } from "../../native/state";
 import { theme } from "../../theme";
@@ -32,8 +33,10 @@ import {
 	type OverlayOptions,
 	type TUI,
 } from "../../tui";
-import { truncateToWidth } from "../../utils";
-import { clampBottomRows, computeLayout, mainColumn, regionAt, type WorkbenchLayout } from "./layout";
+import { padding, truncateToWidth, visibleWidth } from "../../utils";
+import { clampBottomRows, computeLayout, contentColumn, mainColumn, regionAt, type WorkbenchLayout } from "./layout";
+import { nearestTurn, renderRail } from "./rail";
+import { currentTurn, isUserTurnBlock, jumpOffset, promptLabel, type TurnEntry, turnTarget } from "./turn-index";
 
 /** The parts of InteractiveMode the shell reads; InteractiveMode satisfies it structurally. */
 export interface WorkbenchHost {
@@ -61,6 +64,14 @@ const ANIMATION_TICK_MS = 80;
 /** How often a shell hidden behind an inline popup checks whether it may come back. */
 const SUSPEND_POLL_MS = 150;
 const CONSUMED = { consume: true } as const;
+/** Control bytes (C0, DEL, C1) mark keys and escape sequences; anything else is text that would type into the editor. */
+const CONTROL_BYTES = /[\x00-\x1f\x7f-\x9f]/;
+
+/** Where the viewport sat relative to a prompt, to restore after a reflow. */
+interface TurnAnchor {
+	readonly turn: number;
+	readonly offset: number;
+}
 
 interface RenderedPart {
 	/** The array the component returned; unchanged identity means unchanged rows. */
@@ -84,6 +95,23 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	#contentRows: readonly string[] = [];
 	#userTurns = 0;
 	#pinToTail = false;
+	/** User prompts in the current content buffer. */
+	#turns: readonly TurnEntry[] = [];
+	/** Turn label per cached prompt rows, so a streaming frame does not re-derive every label. */
+	#labels = new WeakMap<readonly string[], string>();
+	/** Whether each transcript block starts a user turn; fixed for a block's lifetime. */
+	#turnBlocks = new WeakMap<Component, boolean>();
+	/** Turn jumps requested since the last frame; applied once the content is laid out. */
+	#pendingJumps = 0;
+	/** Width the content buffer was last laid out at; a change reflows it. */
+	#contentWidth = 0;
+	/**
+	 * Read mode: plain keys scroll and jump instead of typing. Holds the focus it
+	 * started on (`null` when nothing was focused); `undefined` when not reading.
+	 */
+	#readingFocus: Component | null | undefined;
+	/** Rail row the pointer is over; resolved to a turn per frame, so it survives a re-index. */
+	#hoverRow: number | undefined;
 	/** Last focus target the shell hosted; restored when an overlay above hands focus back. */
 	#hostedFocus: Component | undefined;
 	/** Editor-area children when {@link #hostedFocus} was seen; a different slot makes it stale. */
@@ -151,6 +179,11 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		this.#contentKey = [];
 		this.#contentRows = [];
 		this.#scroll.setLines([]);
+		this.#turns = [];
+		this.#pendingJumps = 0;
+		this.#contentWidth = 0;
+		this.#readingFocus = undefined;
+		this.#hoverRow = undefined;
 		this.#hostedFocus = undefined;
 		this.#hostedSlot = [];
 		this.#transcript = undefined;
@@ -222,8 +255,17 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	#onInput(data: string): { consume: true } | undefined {
 		const keybindings = getKeybindings();
 		if (!this.#handle) {
-			if (keybindings.matches(data, "fork.workbench.toggle") && !this.#host.ui.hasOverlay()) {
+			if (this.#host.ui.hasOverlay()) return undefined;
+			if (keybindings.matches(data, "fork.workbench.toggle")) {
 				this.open();
+				return CONSUMED;
+			}
+			// "Back to my last prompt" works from anywhere: open, read, jump.
+			if (keybindings.matches(data, "fork.workbench.prevTurn") && !isNativeRendering()) {
+				if (this.open()) {
+					this.#startReading();
+					this.#jump(-1);
+				}
 				return CONSUMED;
 			}
 			return undefined;
@@ -238,17 +280,119 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 			this.close();
 			return CONSUMED;
 		}
-		return undefined;
+		if (keybindings.matches(data, "fork.workbench.prevTurn")) {
+			this.#jump(-1);
+			return CONSUMED;
+		}
+		if (keybindings.matches(data, "fork.workbench.nextTurn")) {
+			this.#jump(1);
+			return CONSUMED;
+		}
+		if (keybindings.matches(data, "fork.workbench.read")) {
+			this.#startReading();
+			this.#host.ui.requestRender();
+			return CONSUMED;
+		}
+		return this.#readingFocus === undefined ? undefined : this.#handleReadKey(data);
+	}
+
+	/** Read-mode keys. Unbound text is swallowed so a stray letter never lands in the prompt. */
+	#handleReadKey(data: string): { consume: true } | undefined {
+		if (this.#endStaleReading()) return undefined;
+		const scroll = this.#scroll;
+		const halfPage = Math.max(1, Math.floor((this.#layout?.bottomTop ?? 0) / 2));
+		if (matchesKey(data, "escape") || matchesKey(data, "enter") || data === "i") this.#stopReading();
+		else if (data === "j") scroll.scroll(1);
+		else if (data === "k") scroll.scroll(-1);
+		// less/vim habits; in the editor these would exit omp (ctrl+d on an empty draft) or wipe the draft.
+		else if (matchesKey(data, "ctrl+d")) scroll.scroll(halfPage);
+		else if (matchesKey(data, "ctrl+u")) scroll.scroll(-halfPage);
+		else if (matchesKey(data, "space")) scroll.page(1);
+		else if (data === "[") this.#jump(-1);
+		else if (data === "]") this.#jump(1);
+		else if (data === "g") scroll.scrollToTop();
+		else if (data === "G") scroll.scrollToBottom();
+		else if (!scroll.handleScrollKey(data) && CONTROL_BYTES.test(data)) return undefined;
+		this.#host.ui.requestRender();
+		return CONSUMED;
+	}
+
+	#startReading(): void {
+		this.#readingFocus = this.#host.ui.getFocused();
+	}
+
+	#stopReading(): void {
+		this.#readingFocus = undefined;
+	}
+
+	/**
+	 * Leave read mode once another hosted component took the keys (a dialog
+	 * replaced the editor), so neither the help line nor the key routing
+	 * outlives it. Focus on the shell itself or an overlay above is transient.
+	 */
+	#endStaleReading(): boolean {
+		if (this.#readingFocus === undefined) return false;
+		const focused = this.#host.ui.getFocused();
+		if (!focused || focused === this.#readingFocus || !this.ownsOverlayFocusTarget(focused)) return false;
+		this.#stopReading();
+		return true;
+	}
+
+	/** Queue a jump to the previous (-1) or next (+1) prompt for the next frame. */
+	#jump(delta: -1 | 1): void {
+		this.#pendingJumps += delta;
+		this.#host.ui.requestRender();
+	}
+
+	#applyPendingJumps(): void {
+		const steps = this.#pendingJumps;
+		this.#pendingJumps = 0;
+		const delta = Math.sign(steps) as -1 | 1;
+		for (let step = 0; step < Math.abs(steps); step++) {
+			const target = turnTarget(this.#turns, this.#scroll.getScrollOffset(), delta);
+			// Past the last prompt there is still the answer below it.
+			if (target === undefined) {
+				if (delta > 0) this.#scroll.scrollToBottom();
+				return;
+			}
+			this.#scroll.setScrollOffset(jumpOffset(this.#turns[target]!));
+		}
 	}
 
 	#handleMouse(event: SgrMouseEvent): boolean {
 		const layout = this.#layout;
-		if (!layout || regionAt(layout, event.row, event.col) === "outside") return false;
+		if (!layout) return false;
+		const region = regionAt(layout, event.row, event.col);
+		this.#setHoverRow(region === "rail" ? event.row : undefined);
+		if (region === "outside") return false;
 		if (event.wheel !== null) {
 			this.#scroll.scroll(event.wheel * WHEEL_STEP);
-			this.#host.ui.requestRender();
+		} else if (event.leftClick && region === "rail") {
+			const turn = this.#railTurnAt(layout, event.row);
+			if (turn !== undefined) this.#scroll.setScrollOffset(jumpOffset(this.#turns[turn]!));
+		} else if (event.leftClick && region === "bottom") {
+			this.#stopReading();
+		} else {
+			return true;
 		}
+		this.#host.ui.requestRender();
 		return true;
+	}
+
+	#railTurnAt(layout: WorkbenchLayout, row: number): number | undefined {
+		return nearestTurn(this.#turns, layout.bottomTop, this.#railTotal(layout), row);
+	}
+
+	/** Rows the rail spans; short content maps one-to-one instead of stretching. */
+	#railTotal(layout: WorkbenchLayout): number {
+		return Math.max(this.#contentRows.length, layout.bottomTop);
+	}
+
+	/** Pointer moves repaint only when the hovered rail row changes. */
+	#setHoverRow(row: number | undefined): void {
+		if (row === this.#hoverRow) return;
+		this.#hoverRow = row;
+		this.#host.ui.requestRender();
 	}
 
 	// --- Rendering --------------------------------------------------------------
@@ -263,6 +407,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		if (!this.#handle) return [];
 		const ui = this.#host.ui;
 		this.#recordHostedFocus();
+		this.#endStaleReading();
 		const top = this.#topVisibleOverlay();
 		if (top && top.component !== this && top.options?.fullscreen !== true) {
 			// An inline popup on top drops the terminal back to the normal buffer, where a
@@ -275,6 +420,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		const chat = this.#mountedTranscript(roots);
 		const chatIndex = chat ? roots.indexOf(chat) : -1;
 		const main = mainColumn(width);
+		const contentWidth = contentColumn(main).width;
 
 		const bottomRoots = chatIndex === -1 ? [] : roots.slice(chatIndex + 1);
 		const bottom: string[] = [];
@@ -285,28 +431,85 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 
 		// No transcript mounted (never after init): everything scrolls, nothing is pinned.
 		const headRoots = chatIndex === -1 ? roots : roots.slice(0, chatIndex);
-		const content = this.#renderContent(headRoots, chat?.children ?? [], main.width);
+		const anchor = this.#takeReflowAnchor(contentWidth);
+		const content = this.#renderContent(headRoots, chat?.children ?? [], contentWidth);
 		if (content !== this.#contentRows) {
 			this.#contentRows = content;
 			this.#scroll.setLines(content);
 		}
-		this.#scroll.setHeight(layout.bottomTop);
+		// Read-mode help keeps its own row; the other hints cover the last content row while they show.
+		const reserved = this.#readingFocus === undefined ? 0 : 1;
+		this.#scroll.setHeight(Math.max(0, layout.bottomTop - reserved));
+		const anchored = anchor && this.#turns[anchor.turn];
+		if (anchored) this.#scroll.setScrollOffset(anchored.row + anchor.offset);
 		if (this.#pinToTail) {
 			this.#pinToTail = false;
 			this.#scroll.scrollToBottom();
 		}
+		this.#applyPendingJumps();
 
-		const lines = [...this.#scroll.render(main.width)];
-		// The notice covers the last visible row, so that row counts as hidden too.
-		const hidden = content.length - this.#scroll.getVisibleRange().end + 1;
-		if (hidden > 1 && layout.bottomTop > 0) {
-			lines[layout.bottomTop - 1] = theme.fg(
-				"dim",
-				truncateToWidth(`↓ 下方还有 ${hidden} 行 · 滚轮向下回到底部`, main.width),
-			);
-		}
+		const lines = this.#renderViewport(layout);
 		lines.push(...bottomLines);
 		return lines;
+	}
+
+	/** Content rows, the status hint over the last one, and the rail beside them. */
+	#renderViewport(layout: WorkbenchLayout): string[] {
+		const width = layout.content.width;
+		const lines = [...this.#scroll.render(width)];
+		const covers = lines.length === layout.bottomTop;
+		while (lines.length < layout.bottomTop) lines.push("");
+		const below = this.#contentRows.length - this.#scroll.getVisibleRange().end;
+		// A hint on the last content row hides that row too.
+		const hint = this.#statusHint(layout, below > 0 ? below + (covers ? 1 : 0) : 0);
+		if (hint && layout.bottomTop > 0) lines[layout.bottomTop - 1] = truncateToWidth(hint, width);
+		const rail = layout.rail;
+		if (!rail) return lines;
+		const turns = this.#turns;
+		const offset = this.#scroll.getScrollOffset();
+		const cells = renderRail(
+			turns,
+			layout.bottomTop,
+			this.#railTotal(layout),
+			this.#scroll.getVisibleRange(),
+			currentTurn(turns, offset),
+		);
+		const gap = padding(rail.width - 1);
+		return lines.map((line, y) => `${line}${padding(width - visibleWidth(line))}${gap}${cells[y] ?? ""}`);
+	}
+
+	/**
+	 * One line on the last content row: the hovered prompt, read-mode help, or
+	 * how much is below (`hidden` rows, 0 at the end).
+	 */
+	#statusHint(layout: WorkbenchLayout, hidden: number): string | undefined {
+		const row = this.#hoverRow;
+		// A resize can drop the rail or shrink the content area under a stale pointer row.
+		const onRail = row !== undefined && layout.rail !== undefined && row < layout.bottomTop;
+		const hover = onRail ? this.#railTurnAt(layout, row) : undefined;
+		if (hover !== undefined) {
+			return theme.fg("accent", `第 ${hover + 1}/${this.#turns.length} 轮 · ${this.#turns[hover]!.label}`);
+		}
+		const more = hidden > 0 ? `↓ 下方还有 ${hidden} 行` : "";
+		if (this.#readingFocus !== undefined) {
+			const help = "阅读 · j/k 滚动 · [ ] 跳轮 · g/G 顶/底 · Esc 返回";
+			return theme.fg("dim", more ? `${help} · ${more}` : help);
+		}
+		return more ? theme.fg("dim", `${more} · 滚轮向下回到底部`) : undefined;
+	}
+
+	/**
+	 * When a width change is about to reflow the content, the prompt the
+	 * viewport is in and how far past it; records the new width. At the tail
+	 * the scroll view's own follow keeps it there.
+	 */
+	#takeReflowAnchor(width: number): TurnAnchor | undefined {
+		if (width === this.#contentWidth) return undefined;
+		this.#contentWidth = width;
+		const top = this.#scroll.getScrollOffset();
+		if (top >= this.#scroll.getMaxScrollOffset()) return undefined;
+		const turn = currentTurn(this.#turns, top);
+		return turn === -1 ? undefined : { turn, offset: top - this.#turns[turn]!.row };
 	}
 
 	/**
@@ -319,13 +522,18 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		const frame: AnimationFrame = { now, tick: Math.floor(now / ANIMATION_TICK_MS) };
 		const headParts = headRoots.map(root => this.#renderPart(root, width, false));
 		const blockParts: (readonly string[])[] = [];
+		/** Parallel to `blockParts`: the block when it starts a user turn. */
+		const turnBlocks: (Component | undefined)[] = [];
 		let userTurns = 0;
 		for (const block of blocks) {
 			// Unbounded rows: the shell scrolls whole blocks instead of the composer's viewport budget.
 			(block as Component & TranscriptPresentationTarget).setTranscriptAllocation?.(Number.MAX_SAFE_INTEGER, frame);
-			if (block instanceof UserMessageComponent) userTurns++;
+			const turn = this.#startsTurn(block);
+			if (turn) userTurns++;
 			const rows = this.#renderPart(block, width, true);
-			if (rows.length > 0) blockParts.push(rows);
+			if (rows.length === 0) continue;
+			blockParts.push(rows);
+			turnBlocks.push(turn ? block : undefined);
 		}
 		// A new prompt from the user follows the conversation again.
 		if (userTurns > this.#userTurns) this.#pinToTail = true;
@@ -337,12 +545,34 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		}
 		this.#contentKey = key;
 		const rows: string[] = [];
+		const turns: TurnEntry[] = [];
 		for (const part of headParts) rows.push(...part);
 		blockParts.forEach((part, index) => {
 			if (index > 0) rows.push("");
+			const block = turnBlocks[index];
+			if (block) turns.push({ row: rows.length, label: this.#labelOf(block, part, width) });
 			rows.push(...part);
 		});
+		this.#turns = turns;
 		return rows;
+	}
+
+	#startsTurn(block: Component): boolean {
+		let turn = this.#turnBlocks.get(block);
+		if (turn === undefined) {
+			turn = isUserTurnBlock(block);
+			this.#turnBlocks.set(block, turn);
+		}
+		return turn;
+	}
+
+	#labelOf(block: Component, rows: readonly string[], width: number): string {
+		let label = this.#labels.get(rows);
+		if (label === undefined) {
+			label = promptLabel(block, rows, width);
+			this.#labels.set(rows, label);
+		}
+		return label;
 	}
 
 	#renderPart(component: Component, width: number, trim: boolean): readonly string[] {

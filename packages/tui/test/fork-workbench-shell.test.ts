@@ -1,5 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { SkillMessageComponent } from "@oh-my-pi/pi-tui/chat/skill-message";
+import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { clampBottomRows, computeLayout, regionAt } from "@oh-my-pi/pi-tui/fork/workbench/layout";
 import { WorkbenchShell } from "@oh-my-pi/pi-tui/fork/workbench/shell";
@@ -56,7 +58,12 @@ function addRows(transcript: TranscriptContainer, prefix: string, count: number)
 }
 
 function plain(rows: readonly string[]): string[] {
-	return rows.map(row => Bun.stripANSI(row).trimEnd());
+	// The turn rail is the last cell of a content row.
+	return rows.map(row =>
+		Bun.stripANSI(row)
+			.replace(/[│┃━]$/, "")
+			.trimEnd(),
+	);
 }
 
 /** Native scrollback only: the scroll buffer minus the active grid (alt or normal). */
@@ -303,6 +310,200 @@ describe("workbench shell", () => {
 	});
 });
 
+const CTRL_UP = "\x1b[1;5A";
+const CTRL_DOWN = "\x1b[1;5B";
+const F3 = "\x1bOR";
+const ESC = "\x1b";
+/** 0-based screen column of the rail cell. */
+const RAIL_COL = COLUMNS - 1;
+
+/** SGR mouse report at a 0-based cell: left press, or pointer motion with no button held. */
+function mouse(kind: "press" | "move", col: number, row: number): string {
+	return `\x1b[<${kind === "press" ? 0 : 35};${col + 1};${row + 1}M`;
+}
+
+/**
+ * Three user turns as the live transcript shows them: a prompt the model
+ * reacted to, a `/skill:` prompt, and a steered prompt, each followed by an
+ * answer; a synthetic auto-continue bubble in between is not a turn.
+ */
+function addConversation(transcript: TranscriptContainer): void {
+	const first = new UserMessageComponent("first prompt");
+	first.setReaction("👍");
+	transcript.addChild(first);
+	addRows(transcript, "answer-a", 12);
+	transcript.addChild(new UserMessageComponent("continue", { synthetic: true }));
+	transcript.addChild(
+		new SkillMessageComponent({
+			role: "custom",
+			customType: "skill-prompt",
+			content: "Loaded SKILL.md instructions",
+			display: true,
+			attribution: "user",
+			timestamp: 1,
+			details: { name: "review", path: "/tmp/SKILL.md", lineCount: 3, prompt: "/skill:review the diff" },
+		}),
+	);
+	addRows(transcript, "answer-s", 12);
+	transcript.addChild(new UserMessageComponent("second prompt", { liveSteered: true }));
+	addRows(transcript, "answer-b", 20);
+}
+
+/** Viewport row showing `text`, or -1. */
+function rowOf(terminal: VirtualTerminal, text: string): number {
+	return plain(terminal.getViewport()).findIndex(row => row.includes(text));
+}
+
+function railTicks(terminal: VirtualTerminal): number {
+	return Bun.stripANSI(terminal.getViewport().join("\n"))
+		.split("\n")
+		.filter(row => row.endsWith("━")).length;
+}
+
+describe("workbench turns", () => {
+	it("marks each real prompt on the rail and jumps between them without overshooting", async () => {
+		useAppKeybindings();
+		const h = harness();
+		addConversation(h.transcript);
+		h.shell.open();
+		await h.settle();
+		// The synthetic bubble is not a turn.
+		expect(railTicks(h.terminal)).toBe(3);
+		expect(rowOf(h.terminal, "answer-b 19")).toBeGreaterThan(-1);
+
+		const press = async (data: string) => {
+			h.terminal.sendInput(data);
+			await h.settle();
+		};
+		// From the tail, back lands on the latest prompt near the top of the viewport…
+		await press(CTRL_UP);
+		const second = rowOf(h.terminal, "second prompt");
+		expect(second).toBeGreaterThanOrEqual(0);
+		expect(second).toBeLessThanOrEqual(2);
+		// …then on the skill prompt, then on the first, and stays there.
+		await press(CTRL_UP);
+		expect(rowOf(h.terminal, "review")).toBeLessThanOrEqual(2);
+		await press(CTRL_UP);
+		const first = rowOf(h.terminal, "first prompt");
+		expect(first).toBeGreaterThanOrEqual(0);
+		expect(first).toBeLessThanOrEqual(2);
+		await press(CTRL_UP);
+		expect(rowOf(h.terminal, "first prompt")).toBe(first);
+		// Forward past the last prompt reaches the end of its answer.
+		await press(CTRL_DOWN);
+		await press(CTRL_DOWN);
+		expect(rowOf(h.terminal, "second prompt")).toBe(second);
+		await press(CTRL_DOWN);
+		expect(rowOf(h.terminal, "answer-b 19")).toBeGreaterThan(-1);
+		expect(h.editor.typed).toBe("");
+	});
+
+	it("opens on the latest prompt in read mode, where plain keys scroll instead of typing", async () => {
+		useAppKeybindings();
+		const h = harness();
+		addConversation(h.transcript);
+		await h.settle();
+		h.terminal.sendInput(CTRL_UP);
+		await h.settle();
+		expect(h.shell.isOpen).toBe(true);
+		const second = rowOf(h.terminal, "second prompt");
+		expect(second).toBeLessThanOrEqual(2);
+
+		h.terminal.sendInput("j");
+		await h.settle();
+		h.terminal.sendInput("x");
+		await h.settle();
+		expect(rowOf(h.terminal, "second prompt")).toBe(second - 1);
+		expect(h.editor.typed).toBe("");
+		h.terminal.sendInput("[");
+		await h.settle();
+		expect(rowOf(h.terminal, "review")).toBeLessThanOrEqual(2);
+
+		// Esc hands the keys back to the prompt.
+		h.terminal.sendInput(ESC);
+		await h.settle();
+		h.terminal.sendInput("x");
+		await h.settle();
+		expect(h.editor.typed).toBe("x");
+		// f3 re-enters read mode without moving.
+		h.terminal.sendInput(F3);
+		await h.settle();
+		h.terminal.sendInput("G");
+		await h.settle();
+		expect(h.editor.typed).toBe("x");
+		expect(rowOf(h.terminal, "answer-b 19")).toBeGreaterThan(-1);
+	});
+
+	it("leaves read mode when a dialog takes the keys, so its keys reach the dialog", async () => {
+		useAppKeybindings();
+		const h = harness();
+		addConversation(h.transcript);
+		h.shell.open();
+		await h.settle();
+		h.terminal.sendInput(F3);
+		await h.settle();
+		expect(rowOf(h.terminal, "阅读 ·")).toBeGreaterThan(-1);
+
+		// An approval prompt replaces the editor and focuses itself.
+		const dialog = new CursorEditor();
+		h.editorContainer.clear();
+		h.editorContainer.addChild(dialog);
+		h.composer.ui.setFocus(dialog);
+		h.composer.ui.requestRender();
+		await h.settle();
+		expect(rowOf(h.terminal, "阅读 ·")).toBe(-1);
+		h.terminal.sendInput(ESC);
+		await h.settle();
+		expect(dialog.typed).toBe(ESC);
+	});
+
+	it("names the hovered tick and jumps to it on click", async () => {
+		useAppKeybindings();
+		const h = harness();
+		addConversation(h.transcript);
+		h.shell.open();
+		await h.settle();
+		expect(rowOf(h.terminal, "first prompt")).toBe(-1);
+
+		h.terminal.sendInput(mouse("move", RAIL_COL, 0));
+		await h.settle();
+		// Named by the prompt text, not the reaction badge on the bubble's top row.
+		expect(rowOf(h.terminal, "第 1/3 轮 · first prompt")).toBeGreaterThan(-1);
+		h.terminal.sendInput(mouse("press", RAIL_COL, 0));
+		await h.settle();
+		expect(rowOf(h.terminal, "first prompt")).toBeLessThanOrEqual(1);
+		// Leaving the rail clears the hint.
+		h.terminal.sendInput(mouse("move", 0, 3));
+		await h.settle();
+		expect(rowOf(h.terminal, "第 1/3 轮")).toBe(-1);
+		expect(h.editor.typed).toBe("");
+	});
+
+	it("keeps the viewport on the same prompt when a resize reflows the answer above it", async () => {
+		useAppKeybindings();
+		const h = harness();
+		h.transcript.addChild(new UserMessageComponent("first prompt"));
+		// Each block wraps to two rows once the content column is narrower than 50.
+		for (let index = 0; index < 20; index++) {
+			h.transcript.addChild({
+				render: (width: number) => (width < 50 ? [`wrap ${index}`, `wrap ${index}…`] : [`wrap ${index}`]),
+			});
+		}
+		h.transcript.addChild(new UserMessageComponent("second prompt"));
+		addRows(h.transcript, "answer-b", 20);
+		h.shell.open();
+		await h.settle();
+		h.terminal.sendInput(CTRL_UP);
+		await h.settle();
+		const before = rowOf(h.terminal, "second prompt");
+		expect(before).toBeLessThanOrEqual(2);
+
+		h.terminal.resize(40, ROWS);
+		await h.settle();
+		expect(rowOf(h.terminal, "second prompt")).toBe(before);
+	});
+});
+
 describe("workbench layout", () => {
 	it("keeps four content rows and the tail of oversized bottom chrome", () => {
 		const bottom = ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -318,5 +519,10 @@ describe("workbench layout", () => {
 		expect(regionAt(layout, 7, 39)).toBe("bottom");
 		expect(regionAt(layout, 7, 40)).toBe("outside");
 		expect(regionAt(layout, 10, 0)).toBe("outside");
+		// The rail and its gap sit right of the content rows only.
+		expect(regionAt(layout, 6, 37)).toBe("content");
+		expect(regionAt(layout, 6, 38)).toBe("rail");
+		expect(regionAt(layout, 6, 39)).toBe("rail");
+		expect(regionAt(computeLayout(12, 10, 3), 6, 11)).toBe("content");
 	});
 });

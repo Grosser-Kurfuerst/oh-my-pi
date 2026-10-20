@@ -7,6 +7,9 @@ import type { KeybindingDefinitions } from "../keybindings";
 
 interface ForkKeybindings {
 	"fork.workbench.toggle": true;
+	"fork.workbench.prevTurn": true;
+	"fork.workbench.nextTurn": true;
+	"fork.workbench.read": true;
 }
 
 declare module "../keybindings" {
@@ -17,5 +20,17 @@ export const FORK_KEYBINDINGS = {
 	"fork.workbench.toggle": {
 		defaultKeys: "ctrl+n",
 		description: "Show or hide the fullscreen workbench",
+	},
+	"fork.workbench.prevTurn": {
+		defaultKeys: "ctrl+up",
+		description: "Workbench: jump to the previous prompt (opens the workbench)",
+	},
+	"fork.workbench.nextTurn": {
+		defaultKeys: "ctrl+down",
+		description: "Workbench: jump to the next prompt",
+	},
+	"fork.workbench.read": {
+		defaultKeys: "f3",
+		description: "Workbench: read the transcript with the keyboard",
 	},
 } as const satisfies KeybindingDefinitions;
