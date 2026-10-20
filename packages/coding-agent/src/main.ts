@@ -39,6 +39,7 @@ import {
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
+import { installWorkbench } from "./fork/workbench";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
 import { fetchBuild } from "./cli/build-service";
@@ -699,6 +700,7 @@ async function runInteractiveMode(
 		if (setupWizard && setupScenes.length > 0) {
 			await setupWizard.runSetupWizard(mode, setupScenes);
 		}
+		installWorkbench(mode);
 
 		// Consume failures immediately, but defer any banner until the transcript is stable.
 		const checkedVersionPromise = versionCheckPromise.catch(() => undefined);

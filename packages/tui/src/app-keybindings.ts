@@ -8,6 +8,7 @@ import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
 import { JSONC, YAML } from "bun";
+import { FORK_KEYBINDINGS } from "./fork/keybindings";
 import { formatKeyHints } from "./key-hint-format";
 import {
 	type Keybinding,
@@ -88,6 +89,7 @@ export function getDefaultPasteImageKeys(platform: NodeJS.Platform = process.pla
  */
 export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
+	...FORK_KEYBINDINGS,
 	"app.interrupt": {
 		defaultKeys: "escape",
 		description: "Interrupt current operation",
