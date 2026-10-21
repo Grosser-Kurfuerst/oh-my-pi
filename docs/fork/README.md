@@ -4,9 +4,50 @@
 
 | 文档 | 内容 |
 |---|---|
-| 本文 | 改造点总览、上游触点、同步上游时可能冲突的地方 |
+| 本文 | fork 版的使用方法、改造点总览、上游触点、同步上游时可能冲突的地方 |
 | [workbench-plan.md](workbench-plan.md) | 全屏工作台的完整方案与迭代记录 |
 | [release-ci.md](release-ci.md) | 同步上游与构建发布的 CI 维护、本机 omp 的安装与更新 |
+
+## 0. 使用 fork 版 omp
+
+fork 版只提供 linux-x64 的独立二进制，由 CI 自动构建，发布在本仓库的 Releases。
+
+**新机器直接安装**：
+
+```bash
+curl -fL -o ~/.local/bin/omp https://github.com/Grosser-Kurfuerst/oh-my-pi/releases/latest/download/omp-linux-x64
+```
+
+```bash
+chmod +x ~/.local/bin/omp
+```
+
+**已装官方版时切换**（先备份官方版，方便回退）：
+
+```bash
+cp ~/.local/bin/omp ~/.local/bin/omp.official
+```
+
+```bash
+PI_BUILD_URL=https://raw.githubusercontent.com/Grosser-Kurfuerst/oh-my-pi/build-index omp update
+```
+
+提示 `Already up to date` 时加 `--force`。装好后 fork 版内置了更新地址，以后不需要 `PI_BUILD_URL`。
+
+**日常更新**：和官方版一样，启动时会提示有新版，执行 `omp update`。上游发新版和 fork 自己改代码都会发布更高的版本号；只改 fork 代码的构建版本号形如 `18.12.6-kf.3`（规则见 [release-ci.md §2.1](release-ci.md)）。刚发布的构建可能要几分钟后才检测得到。
+
+**确认装的是 fork 版**：`omp --version` 带 `-kf.N` 的一定是 fork 版；版本号和上游相同时，比对 `sha256sum ~/.local/bin/omp` 和[索引](https://raw.githubusercontent.com/Grosser-Kurfuerst/oh-my-pi/build-index/api/products/omp/latest/linux-x86_64)里的 `sha256`。
+
+**回退**：
+
+- 回到官方版：`cp ~/.local/bin/omp.official ~/.local/bin/omp`，或者执行 `PI_BUILD_URL=https://build.stencil.so omp update --force`。
+- 回到 fork 的上一个构建：见 [release-ci.md §5.4](release-ci.md)。
+
+注意：
+
+- 不要用 `omp update --canary`，fork 只发布稳定版。
+- 更新后要重启正在运行的 omp。
+- 从源码目录运行的 omp 不会提示更新。
 
 ## 1. 改造点
 
