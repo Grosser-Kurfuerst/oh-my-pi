@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { type Component, Container, getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -66,13 +67,12 @@ function harness() {
 		chatContainer,
 		editorContainer,
 		editor,
-		showWarning: () => {},
+		showWarning: message => calls.push(`warning: ${message}`),
 		toggleThinkingBlockVisibility: () => calls.push("thinking"),
 		showHistorySearch: () => calls.push("history"),
 		openExternalEditor: () => calls.push("external"),
 		resetDisplayAfterAppearanceRefresh: () => calls.push("reset"),
 		toggleToolOutputExpansion: () => calls.push("expand"),
-		showCopySelector: () => calls.push("copy"),
 	};
 	const shell = installWorkbench(mode);
 	cleanups.push(() => shell.close());
@@ -84,9 +84,8 @@ function harness() {
 }
 
 describe("workbench transcript actions", () => {
-	it("runs the actions upstream stands down for while the shell is the frontmost overlay", async () => {
+	it("opens on install and runs the actions upstream stands down for while the shell is frontmost", async () => {
 		const h = harness();
-		await h.press(CTRL_N);
 		expect(h.shell.isOpen).toBe(true);
 
 		await h.press(CTRL_O);
@@ -95,8 +94,18 @@ describe("workbench transcript actions", () => {
 		expect(h.editor.typed).toBe("");
 	});
 
+	it("stays inline without a warning when native rendering is on at startup", () => {
+		setNativeRendering(true);
+		cleanups.push(() => setNativeRendering(false));
+		const h = harness();
+		expect(h.shell.isOpen).toBe(false);
+		expect(h.calls).toEqual([]);
+	});
+
 	it("leaves the keys alone when the shell is closed or covered", async () => {
 		const h = harness();
+		await h.press(CTRL_N);
+		expect(h.shell.isOpen).toBe(false);
 		await h.press(CTRL_O);
 		expect(h.calls).toEqual([]);
 		expect(h.editor.typed).toBe(CTRL_O);

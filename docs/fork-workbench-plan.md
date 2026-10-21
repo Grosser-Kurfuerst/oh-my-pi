@@ -169,23 +169,22 @@ ownsOverlayFocusTarget(c) {
 
 **输入优先级**：外壳通过 `ui.addInputListener`（[tui.ts:2443](../packages/tui/src/tui.ts:2443)）注册一个监听器，只在外壳是最顶层可见覆盖层时生效，按以下顺序处理：
 
-1. **SGR 鼠标事件**：交给 `routeSgrMouseInput(data, handler)`（[mouse.ts](../packages/tui/src/mouse.ts)），按坐标分发到侧边栏、内容区、导航条或底部区。点击底部区会把焦点切回编辑器。所有鼠标事件都 `consume`。
+1. **SGR 鼠标事件**：交给 `routeSgrMouseInput(data, handler)`（[mouse.ts](../packages/tui/src/mouse.ts)），按坐标分发到侧边栏、内容区、导航条或底部区。点击底部区会把焦点切回编辑器（M4 有侧边栏焦点后才有意义，目前只是吞掉）。所有鼠标事件都 `consume`。
 2. **全局快捷键**（§6.1）：匹配后 `consume`。
-3. **阅读或侧边栏焦点下的按键**：吞掉对应的纯字母键。
+3. **侧边栏焦点下的按键**：吞掉对应的纯字母键。
 4. **其他输入**：不处理，交给焦点组件（编辑器）。
 
 外壳隐藏时，监听器只识别 `toggle` 和 `prevTurn` 两个键（用来唤起外壳），其余全部放行。
 
-### 5.3 滚动与阅读焦点
+### 5.3 滚动
 
-外壳有三种焦点状态：`editor`（默认）、`read`、`sidebar`。
+外壳有两种焦点状态：`editor`（默认）、`sidebar`。原计划的 `read` 焦点（键盘滚动、`y`、`c`）已在 M3 之后移除，见 §8"M3 之后的调整"。
 
 | 输入 | 行为 |
 |---|---|
 | 滚轮（任何焦点） | 内容区滚动 3 行，**不抢占键盘焦点**，可以继续打字 |
-| 向上滚离底部 | 设置 `followTail=false`，内容区底部出现一行 `↓ N 行新输出 · G 回到底部` |
+| 向上滚离底部 | 设置 `followTail=false`，内容区底部出现一行 `↓ 下方还有 N 行 · 滚轮向下回到底部` |
 | 提交提示词 | 自动 `scrollToBottom()`，恢复 followTail（订阅会话的 user message 事件） |
-| `read` 焦点下的按键 | `j/k`、`↑/↓` 滚 1 行；`PgUp/PgDn/space` 翻页；`[`、`]` 跳到上/下一轮；`g/G` 跳到顶/底；`y` 复制当前轮；`c` 打开上游 `/copy` 选择器；`Esc`、`i`、`Enter` 回到编辑器 |
 
 **resize 时保持锚点**：记录视口顶部所在的轮次 `turnIndex` 及其在该轮内的偏移；重新排版后，按新的 `startRow + 偏移` 恢复位置。处于 followTail 时直接贴底。
 
@@ -212,7 +211,7 @@ export function buildTurnIndex(transcript: TranscriptContainer, rows: readonly s
 - **点击**：在第 `y` 行点击时，跳到 `|y_i - y|` 最小的那一轮，并设 `scrollTop = row_i - 1`，让提示词贴近视口顶部。
 - **悬停**：在底部状态行临时显示 `第 k/N 轮 · <label>`，每 50ms 最多重绘一次。
 
-**快捷键**：`[`、`]` 与全局的 `prevTurn`、`nextTurn` 共用同一个 `jumpToTurn(delta)`。外壳隐藏时按 `prevTurn`，会先打开外壳、进入 `read` 焦点，再跳到上一轮，所以在任何状态下"跳到上一条提示词"都只需按一次键。
+**快捷键**：全局的 `prevTurn`、`nextTurn` 共用同一个 `jumpToTurn(delta)`。外壳隐藏时按 `prevTurn`，会先打开外壳再跳到上一轮，所以在任何状态下"跳到上一条提示词"都只需按一次键。
 
 ### 5.5 鼠标选择与复制（`selection.ts`）
 
@@ -225,7 +224,7 @@ export function buildTurnIndex(transcript: TranscriptContainer, rows: readonly s
 
 **已知限制与兜底**：
 
-- 软换行处会被复制成真实换行。需要干净的原文时，用 `c`（上游 `/copy` 选择器）或 `y`（复制当前整轮）。
+- 软换行处会被复制成真实换行。需要干净的原文时，用上游 `/copy` 选择器。
 - 需要原生选择时：Tabby 中按住 Shift 拖动（xterm.js 会绕过鼠标上报）；Mac 终端按住 Option 拖动；也可以按 `toggle` 关闭外壳，回到原生模式。
 
 ### 5.6 左侧会话侧边栏（`sidebar.ts`）
@@ -273,20 +272,21 @@ export interface SidebarSession { path: string; title: string; modified: Date; s
 | `fork.workbench.prevTurn` | `ctrl+up` | 跳到上一轮；外壳隐藏时先打开外壳 |
 | `fork.workbench.nextTurn` | `ctrl+down` | 跳到下一轮 |
 | `fork.workbench.sidebar` | `f2` | 聚焦侧边栏；再按一次收起或展开侧边栏 |
-| `fork.workbench.read` | `f3` | 进入阅读焦点（不跳轮） |
 
-**Mac 注意**：`⌃↑`、`⌃↓` 默认被 Mission Control 占用。可以在"系统设置 → 键盘快捷键"里关掉这两项，也可以把 `prevTurn`、`nextTurn` 改到其他键。外壳内的 `[`、`]` 和滚轮始终可用。
+**Mac 注意**：`⌃↑`、`⌃↓` 默认被 Mission Control 占用。可以在"系统设置 → 键盘快捷键"里关掉这两项，也可以把 `prevTurn`、`nextTurn` 改到其他键。导航条点击和滚轮始终可用。
+
+**待办（M5）**：上游 `/hotkeys`（[command-controller.ts:931](../packages/coding-agent/src/modes/controllers/command-controller.ts:931)）还列不出这些键。之后新增或改动工作台快捷键时，都要把说明同步加入 `/hotkeys`。
 
 ### 6.2 设置（`fork/workbench-settings.ts`）
 
 | 设置 | 默认 | 说明 |
 |---|---|---|
 | `fork.workbench.enabled` | `true` | 总开关；关闭后快捷键也不再拦截 |
-| `fork.workbench.autoOpen` | `false` | 启动后自动进入外壳 |
+| `fork.workbench.autoOpen` | `true` | 启动后自动进入外壳；`ctrl+n` 仍可隐藏（目前是 `installWorkbench` 里的固定行为，尚无设置项） |
 | `fork.workbench.sidebarWidth` | `0` | 0 表示按比例自动计算 |
 | `fork.workbench.minColumns` | `100` | 终端列数低于该值时自动收起侧边栏 |
 
-M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决定是否接入设置系统（触点 ③）。
+M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen` 目前直接写成安装后打开）；M5 再决定是否接入设置系统（触点 ③）。
 
 ---
 
@@ -300,7 +300,7 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决
 | resize | 重新布局，按轮次锚点恢复滚动位置（§5.3）；侧边栏按 `minColumns` 自动收起或展开。 |
 | 流式输出 | 订阅 `session.subscribe`，每个事件都 `requestRender`；流式期间外壳另开一个 80ms 定时器，驱动 spinner 和 `beginFrame`。 |
 | 退出（`ctrl+c`、`/quit`） | `tui.stop()` 会自动退出 alt screen 并补写 history；外壳在 `ui` 停止时清理定时器和输入监听器。 |
-| 原生 TSP 渲染（`isNativeRendering()`） | 禁用外壳，提示"当前渲染模式不支持"。 |
+| 原生 TSP 渲染（`isNativeRendering()`） | 禁用外壳：启动时不自动打开，也不提示；手动 `toggle` 时提示"工作台不支持当前的原生渲染模式"。 |
 | 图片（kitty、sixel） | 在内容区滚动时图片可能被截断。第一版接受这个问题；如果影响明显，把图片行替换为 `[image]` 占位。 |
 | 失去的原生能力 | 外壳期间不能用终端原生搜索，也不能点击内联 subagent 聚焦。按 `toggle` 回到原生模式即可。 |
 
@@ -335,7 +335,7 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决
   ```bash
   printf '\033]52;c;%s\007' "$(printf test | base64)"
   ```
-- [ ] 在两个环境中确认 `ctrl+n`、`ctrl+up`、`ctrl+down`、`f2`、`f3` 能送到终端程序，没有被终端或系统拦截。被拦截的键记下来，M1 改用替代键。
+- [ ] 在两个环境中确认 `ctrl+n`、`ctrl+up`、`ctrl+down`、`f2` 能送到终端程序，没有被终端或系统拦截。被拦截的键记下来，M1 改用替代键。
 - [ ] 在两个环境中确认 SGR 鼠标上报可用。可以在现有的全屏覆盖层（如 `/resume`）里滚动滚轮来验证。
 
 **结果**：把结论写回本文档 §6.1 和 §5.5；不可用的项目改用兜底方案。
@@ -359,7 +359,7 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决
 - [ ] 按 `ctrl+n` 打开和关闭外壳；关闭后原生 scrollback 中能看到外壳期间产生的全部输出，没有缺失或重复。
 - [ ] 在外壳中正常打字、提交、中断；中文输入法候选框跟随光标。
 - [ ] 流式输出期间 spinner 在转，transcript 实时增长；跟随底部时自动滚动。
-- [ ] 滚轮上滚后停止跟随，出现"↓ N 行新输出"；提交提示词后回到底部。
+- [ ] 滚轮上滚后停止跟随，出现"↓ 下方还有 N 行"；提交提示词后回到底部。
 - [ ] 打开 `/model` 这类内联选择器，以及 `/resume` 这类全屏覆盖层，再关闭，焦点都能回到编辑器。
 - [ ] 打开非全屏弹窗（如 jobs）时，外壳临时隐藏；弹窗关闭后外壳恢复。
 - [ ] 改变终端尺寸后布局正确。
@@ -416,15 +416,15 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决
 - 新增 `turn-index.ts`、`rail.ts`（纯函数）。
 - `shell.ts` 增加以下能力：
   - 导航条渲染与点击、悬停；
-  - `read` 焦点与相应按键（§5.3）；
+  - ~~`read` 焦点与相应按键~~（M3 之后移除）；
   - `jumpToTurn`；
   - resize 时保持锚点。
-- `fork/keybindings.ts` 增加 `prevTurn`、`nextTurn`、`read`。
+- `fork/keybindings.ts` 增加 `prevTurn`、`nextTurn`（`read` 已在 M3 之后移除）。
 - 如果 M1 性能不达标，在这里实现内容区缓存。
 
 **验收（功能）**：
 
-- [ ] 用 `ctrl+up`、`ctrl+down`、`[`、`]` 跳转后，目标提示词位于视口顶部附近，跳到第一轮或最后一轮时不越界。
+- [ ] 用 `ctrl+up`、`ctrl+down` 跳转后，目标提示词位于视口顶部附近，跳到第一轮或最后一轮时不越界。
 - [ ] 外壳隐藏时按 `ctrl+up`，外壳打开并直接跳到上一轮。
 - [ ] 导航条上的刻度数等于用户提示词数（合成消息不计）；视口位置和当前轮次的高亮正确。
 - [ ] 点击导航条能跳到最近的一轮；悬停时底部显示 `第 k/N 轮 · 标签`。
@@ -436,6 +436,8 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决
 - [ ] `rail`：映射单调；同一行多个轮次时合并；点击时最近轮次的边界判断正确。
 
 **M2 实施记录**：
+
+> 注：下文涉及阅读模式（`read` 焦点、`f3`）的内容已在 M3 之后移除，见"M3 之后的调整"。
 
 - **与方案的偏差**：
   - 轮次索引不再单独遍历 transcript，而是在外壳拼接内容区时顺手记录每个轮次块在内容缓冲中的起始行。`TurnEntry` 只保留 `row` 和 `label`。
@@ -479,7 +481,7 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决
 
 - 新增 `selection.ts`。
 - `shell.ts` 接入：拖选、边缘自动滚动、双击和三击、反色高亮。
-- 在 `read` 焦点下增加 `y`（复制当前轮）、`c`（上游 `/copy` 选择器）。
+- ~~在 `read` 焦点下增加 `y`（复制当前轮）、`c`（上游 `/copy` 选择器）~~（M3 之后移除）。
 - `fork/workbench.ts` 注入 `copyToClipboard`。
 
 **验收（功能）**：
@@ -487,7 +489,6 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决
 - [ ] 在 Tabby（Windows）和 Mac（SSH）上拖选，粘贴的内容与屏幕上看到的一致；中英文混排时宽字符不会被切开，也不带 ANSI 残留和行尾空格。
 - [ ] 拖到上下边缘时自动滚动，跨越多屏的选区完整。
 - [ ] 双击选中一个词，三击选中整行。
-- [ ] `y` 复制当前轮，`c` 打开上游 copy 选择器。
 - [ ] 按住 Shift（Tabby）或 Option（Mac）拖动时，走原生选择。
 
 **验收（测试）**：
@@ -495,6 +496,8 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决
 - [ ] `selection`：用包含 CJK 和 ANSI 的多行、跨行选区作为输入，提取的文本应完全精确。
 
 **M3 实施记录**：
+
+> 注：下文涉及阅读模式和 `y`、`c` 的内容已在 M3 之后移除，见"M3 之后的调整"。
 
 - **与方案的偏差**：
   - 状态机做成 `selection.ts` 里的 `MouseSelection`：单击只记 anchor，指针离开 anchor 所在格才出现选区。双击、三击选中的词和整行是固定范围，按住拖动不会再扩展。第四次连击重新从单击算起。
@@ -515,6 +518,17 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决
   - 选区按逻辑行号记录。选区上方的块高度变化（例如运行中工具的输出、subagent 进度块在流式增长）后，高亮会落到别的行，直到下一次单击。
   - 状态行提示覆盖内容区最后一行，选区落在这一行时看不到该行的高亮。
 - **待手动验证**：Tabby（Windows）和 Mac（SSH）下的拖选、双击三击、OSC 52 粘贴结果，以及按住 Shift／Option 走原生选择。
+
+### M3 之后的调整（验收反馈）
+
+- **默认打开**：`installWorkbench` 安装后直接打开外壳，`ctrl+n` 仍可隐藏和重新打开。原生渲染模式下不打开，也不弹警告。暂时是固定行为，M5 再决定是否做成 `autoOpen` 设置。是否打开只在安装时判断一次：Tern 乐观启动后又被撤销时不会补开，需要手动 `ctrl+n`；握手晚于安装时会先打开再被关掉，闪一下 alt screen。
+- **移除阅读模式**：删掉 `fork.workbench.read`（`f3`）、`read` 焦点及其按键，包括 `j/k`、`ctrl+d/u`、`space`、`[`、`]`、`g/G` 滚动跳转，以及 `y` 复制当前轮、`c` 打开 `/copy`。替代方式如下：
+  - 滚动用滚轮；
+  - 跳轮用 `ctrl+up`、`ctrl+down` 或点击导航条；
+  - 复制用鼠标拖选，或上游 `/copy`。
+
+  外壳隐藏时按 `ctrl+up` 仍会打开外壳并跳到上一轮，之后按键照常输入编辑器。少了阅读模式的提示行，内容区重新用满底部固定区以上的全部行。
+- **快捷键说明**：工作台快捷键的说明要加入 `/hotkeys`，列为 M5 待办（§6.1）。
 
 ### M4 会话侧边栏
 
@@ -546,14 +560,16 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量；M5 再决
 **改动**：
 
 - 新增 `fork/workbench-settings.ts`；决定是否接入触点 ③（不接入时保留常量）。
-- 实现 `autoOpen`。
+- 决定是否把默认打开做成 `autoOpen` 设置（默认打开已在 M3 之后实现）。
+- 把工作台快捷键（`ctrl+n`、`ctrl+up`、`ctrl+down`、`f2` 等）的说明加入 `/hotkeys`。
 - 在 `fork/workbench/index.ts` 顶部写上游 API 依赖清单（§11）。
 - 在 `packages/coding-agent/CHANGELOG.md` 的 `[Unreleased]` 下增加 `### Added` 条目。
 - 根据 M1～M4 的实际结果更新本文档。
 
 **验收**：
 
-- [ ] 设置项生效：关闭 `enabled` 后快捷键不再拦截；开启 `autoOpen` 后启动即进入外壳（不会盖住 setup wizard）。
+- [ ] 设置项生效：关闭 `enabled` 后快捷键不再拦截；关闭 `autoOpen` 后启动停在原生界面，开启时启动即进入外壳（不会盖住 setup wizard）。
+- [ ] `/hotkeys` 列出全部工作台快捷键及其说明。
 - [ ] 完整跑一遍 M1～M4 的功能验收清单，没有回退。
 - [ ] 执行 `git diff main --stat`，确认上游文件的改动只有计划中的触点。
 

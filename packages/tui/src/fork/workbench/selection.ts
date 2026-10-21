@@ -100,13 +100,6 @@ export function lineRange(row: number): CellRange {
 	return { start: { row, col: 0 }, end: { row, col: LINE_END } };
 }
 
-/** Plain text of whole rows `[from, to)`, blank rows at either end dropped. */
-export function rowsText(rows: readonly string[], from: number, to: number): string {
-	if (to <= from) return "";
-	const text = selectedText(rows, { start: { row: from, col: 0 }, end: { row: to - 1, col: LINE_END } });
-	return text.replace(/^\n+|\n+$/g, "");
-}
-
 /** Presses on the same cell this close together count as a double or triple click. */
 const MULTI_CLICK_MS = 400;
 

@@ -9,7 +9,6 @@ interface ForkKeybindings {
 	"fork.workbench.toggle": true;
 	"fork.workbench.prevTurn": true;
 	"fork.workbench.nextTurn": true;
-	"fork.workbench.read": true;
 }
 
 declare module "../keybindings" {
@@ -28,9 +27,5 @@ export const FORK_KEYBINDINGS = {
 	"fork.workbench.nextTurn": {
 		defaultKeys: "ctrl+down",
 		description: "Workbench: jump to the next prompt",
-	},
-	"fork.workbench.read": {
-		defaultKeys: "f3",
-		description: "Workbench: read the transcript with the keyboard",
 	},
 } as const satisfies KeybindingDefinitions;

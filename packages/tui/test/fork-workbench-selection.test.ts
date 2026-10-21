@@ -4,7 +4,6 @@ import {
 	LINE_END,
 	MouseSelection,
 	orderRange,
-	rowsText,
 	selectedText,
 	wordRange,
 } from "@oh-my-pi/pi-tui/fork/workbench/selection";
@@ -23,10 +22,6 @@ describe("selection text", () => {
 	it("expands tabs and keeps blank rows inside the range", () => {
 		const range = orderRange({ row: 2, col: 0 }, { row: 3, col: LINE_END });
 		expect(selectedText(rows, range)).toBe(`${replaceTabs("第三行\tend")}\n`);
-	});
-
-	it("copies whole rows without the blank edges", () => {
-		expect(rowsText(["", "\x1b[1mprompt\x1b[22m", "answer  ", "", ""], 0, 5)).toBe("prompt\nanswer");
 	});
 
 	it("picks a letter run, a single CJK character, or a lone punctuation mark as the word", () => {

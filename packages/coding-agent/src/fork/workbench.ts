@@ -3,7 +3,7 @@
  * lives in pi-tui and depends on nothing here; this module hands it the
  * interactive mode and the app-level services it needs.
  */
-import { type Component, getKeybindings } from "@oh-my-pi/pi-tui";
+import { type Component, getKeybindings, isNativeRendering } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "@oh-my-pi/pi-tui/app-keybindings";
 import { type WorkbenchHost, WorkbenchShell } from "@oh-my-pi/pi-tui/fork/workbench/shell";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
@@ -19,7 +19,6 @@ export interface WorkbenchMode extends WorkbenchHost {
 	openExternalEditor(): void;
 	resetDisplayAfterAppearanceRefresh(): void;
 	toggleToolOutputExpansion(): void;
-	showCopySelector(): void;
 }
 
 /**
@@ -42,14 +41,15 @@ function expandFocusedDialog(focused: Component | null): boolean {
 	return false;
 }
 
-/** Install the workbench toggle on a fully initialized interactive mode. */
+/** Install the workbench on a fully initialized interactive mode and open it; the toggle still hides it. */
 export function installWorkbench(mode: WorkbenchMode): WorkbenchShell {
 	const shell = new WorkbenchShell(mode, {
 		notify: message => mode.showWarning(message),
 		copyToClipboard,
-		openCopySelector: () => mode.showCopySelector(),
 	});
 	shell.install();
+	// Native rendering cannot host the shell; stay inline there without the warning open() would show.
+	if (!isNativeRendering()) shell.open();
 	// Registered after upstream's listeners, so it only sees keys they passed on.
 	mode.ui.addInputListener(data => {
 		if (!shell.isFrontmost) return undefined;

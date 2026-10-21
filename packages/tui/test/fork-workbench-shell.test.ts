@@ -312,8 +312,6 @@ describe("workbench shell", () => {
 
 const CTRL_UP = "\x1b[1;5A";
 const CTRL_DOWN = "\x1b[1;5B";
-const F3 = "\x1bOR";
-const ESC = "\x1b";
 /** 0-based screen column of the rail cell. */
 const RAIL_COL = COLUMNS - 1;
 
@@ -399,63 +397,22 @@ describe("workbench turns", () => {
 		expect(h.editor.typed).toBe("");
 	});
 
-	it("opens on the latest prompt in read mode, where plain keys scroll instead of typing", async () => {
+	it("opens a hidden shell on the latest prompt, and keys keep typing into the prompt", async () => {
 		useAppKeybindings();
 		const h = harness();
 		addConversation(h.transcript);
 		await h.settle();
+		expect(rowOf(h.terminal, "second prompt")).toBe(-1);
 		h.terminal.sendInput(CTRL_UP);
 		await h.settle();
 		expect(h.shell.isOpen).toBe(true);
 		const second = rowOf(h.terminal, "second prompt");
+		expect(second).toBeGreaterThanOrEqual(0);
 		expect(second).toBeLessThanOrEqual(2);
 
-		h.terminal.sendInput("j");
-		await h.settle();
-		h.terminal.sendInput("x");
-		await h.settle();
-		expect(rowOf(h.terminal, "second prompt")).toBe(second - 1);
-		expect(h.editor.typed).toBe("");
-		h.terminal.sendInput("[");
-		await h.settle();
-		expect(rowOf(h.terminal, "review")).toBeLessThanOrEqual(2);
-
-		// Esc hands the keys back to the prompt.
-		h.terminal.sendInput(ESC);
-		await h.settle();
 		h.terminal.sendInput("x");
 		await h.settle();
 		expect(h.editor.typed).toBe("x");
-		// f3 re-enters read mode without moving.
-		h.terminal.sendInput(F3);
-		await h.settle();
-		h.terminal.sendInput("G");
-		await h.settle();
-		expect(h.editor.typed).toBe("x");
-		expect(rowOf(h.terminal, "answer-b 19")).toBeGreaterThan(-1);
-	});
-
-	it("leaves read mode when a dialog takes the keys, so its keys reach the dialog", async () => {
-		useAppKeybindings();
-		const h = harness();
-		addConversation(h.transcript);
-		h.shell.open();
-		await h.settle();
-		h.terminal.sendInput(F3);
-		await h.settle();
-		expect(rowOf(h.terminal, "阅读 ·")).toBeGreaterThan(-1);
-
-		// An approval prompt replaces the editor and focuses itself.
-		const dialog = new CursorEditor();
-		h.editorContainer.clear();
-		h.editorContainer.addChild(dialog);
-		h.composer.ui.setFocus(dialog);
-		h.composer.ui.requestRender();
-		await h.settle();
-		expect(rowOf(h.terminal, "阅读 ·")).toBe(-1);
-		h.terminal.sendInput(ESC);
-		await h.settle();
-		expect(dialog.typed).toBe(ESC);
 	});
 
 	it("names the hovered tick and jumps to it on click", async () => {
@@ -531,18 +488,16 @@ describe("workbench layout", () => {
 describe("workbench selection", () => {
 	function copyHarness() {
 		const copied: string[] = [];
-		let pickers = 0;
 		const h = harness({
 			copyToClipboard: async text => {
 				copied.push(text);
 			},
-			openCopySelector: () => pickers++,
 		});
 		const send = async (data: string) => {
 			h.terminal.sendInput(data);
 			await h.settle();
 		};
-		return { ...h, copied, send, pickers: () => pickers };
+		return { ...h, copied, send };
 	}
 
 	it("keeps scrolling while a drag rests on the top row and copies every row it passed", async () => {
@@ -617,25 +572,5 @@ describe("workbench selection", () => {
 		await click();
 		await click();
 		expect(h.copied).toEqual(["beta", "alpha beta gamma"]);
-	});
-
-	it("copies the turn being read with y and opens the message picker with c", async () => {
-		useAppKeybindings();
-		const h = copyHarness();
-		addConversation(h.transcript);
-		await h.settle();
-		await h.send(CTRL_UP);
-		await h.send("y");
-		expect(h.copied).toHaveLength(1);
-		// The turn as rendered: from its prompt bubble to the end of its answer, nothing of the turn before.
-		const turn = h.copied[0]!;
-		expect(turn).toContain("second prompt");
-		expect(turn.endsWith("answer-b 19")).toBe(true);
-		expect(turn).not.toContain("answer-s");
-		expect(rowOf(h.terminal, "已复制第 3 轮")).toBeGreaterThan(-1);
-
-		await h.send("c");
-		expect(h.pickers()).toBe(1);
-		expect(h.editor.typed).toBe("");
 	});
 });

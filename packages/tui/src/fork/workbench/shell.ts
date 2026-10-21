@@ -20,7 +20,6 @@ import {
 } from "../../chrome/transcript-container";
 import { ScrollView } from "../../components/scroll-view";
 import { getKeybindings } from "../../keybindings";
-import { matchesKey } from "../../keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../../mouse";
 import { isNativeRendering, onNativeRenderingChange } from "../../native/state";
 import { theme } from "../../theme";
@@ -37,7 +36,7 @@ import {
 import { padding, truncateToWidth, visibleWidth } from "../../utils";
 import { clampBottomRows, computeLayout, contentColumn, mainColumn, regionAt, type WorkbenchLayout } from "./layout";
 import { nearestTurn, renderRail } from "./rail";
-import { type CellPoint, highlightRow, LINE_END, MouseSelection, rowSpan, rowsText, selectedText } from "./selection";
+import { type CellPoint, highlightRow, LINE_END, MouseSelection, rowSpan, selectedText } from "./selection";
 import { currentTurn, isUserTurnBlock, jumpOffset, promptLabel, type TurnEntry, turnTarget } from "./turn-index";
 
 /** The parts of InteractiveMode the shell reads; InteractiveMode satisfies it structurally. */
@@ -52,8 +51,6 @@ export interface WorkbenchShellOptions {
 	notify?(message: string): void;
 	/** Put text on the clipboard; without it a selection only highlights. */
 	copyToClipboard?(text: string): Promise<void>;
-	/** Open the app's message-level copy picker (read-mode `c`). */
-	openCopySelector?(): void;
 }
 
 const SHELL_OVERLAY: OverlayOptions = {
@@ -72,8 +69,6 @@ const ANIMATION_TICK_MS = 80;
 /** How often a shell hidden behind an inline popup checks whether it may come back. */
 const SUSPEND_POLL_MS = 150;
 const CONSUMED = { consume: true } as const;
-/** Control bytes (C0, DEL, C1) mark keys and escape sequences; anything else is text that would type into the editor. */
-const CONTROL_BYTES = /[\x00-\x1f\x7f-\x9f]/;
 
 /** Where the viewport sat relative to a prompt, to restore after a reflow. */
 interface TurnAnchor {
@@ -113,11 +108,6 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	#pendingJumps = 0;
 	/** Width the content buffer was last laid out at; a change reflows it. */
 	#contentWidth = 0;
-	/**
-	 * Read mode: plain keys scroll and jump instead of typing. Holds the focus it
-	 * started on (`null` when nothing was focused); `undefined` when not reading.
-	 */
-	#readingFocus: Component | null | undefined;
 	/** Rail row the pointer is over; resolved to a turn per frame, so it survives a re-index. */
 	#hoverRow: number | undefined;
 	/** Last focus target the shell hosted; restored when an overlay above hands focus back. */
@@ -197,7 +187,6 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		this.#turns = [];
 		this.#pendingJumps = 0;
 		this.#contentWidth = 0;
-		this.#readingFocus = undefined;
 		this.#hoverRow = undefined;
 		this.#resetSelection();
 		this.#hostedFocus = undefined;
@@ -276,12 +265,9 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 				this.open();
 				return CONSUMED;
 			}
-			// "Back to my last prompt" works from anywhere: open, read, jump.
+			// "Back to my last prompt" works from anywhere: open, then jump.
 			if (keybindings.matches(data, "fork.workbench.prevTurn") && !isNativeRendering()) {
-				if (this.open()) {
-					this.#startReading();
-					this.#jump(-1);
-				}
+				if (this.open()) this.#jump(-1);
 				return CONSUMED;
 			}
 			return undefined;
@@ -306,56 +292,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 			this.#jump(1);
 			return CONSUMED;
 		}
-		if (keybindings.matches(data, "fork.workbench.read")) {
-			this.#startReading();
-			this.#host.ui.requestRender();
-			return CONSUMED;
-		}
-		return this.#readingFocus === undefined ? undefined : this.#handleReadKey(data);
-	}
-
-	/** Read-mode keys. Unbound text is swallowed so a stray letter never lands in the prompt. */
-	#handleReadKey(data: string): { consume: true } | undefined {
-		if (this.#endStaleReading()) return undefined;
-		const scroll = this.#scroll;
-		const halfPage = Math.max(1, Math.floor((this.#layout?.bottomTop ?? 0) / 2));
-		if (matchesKey(data, "escape") || matchesKey(data, "enter") || data === "i") this.#stopReading();
-		else if (data === "j") scroll.scroll(1);
-		else if (data === "k") scroll.scroll(-1);
-		// less/vim habits; in the editor these would exit omp (ctrl+d on an empty draft) or wipe the draft.
-		else if (matchesKey(data, "ctrl+d")) scroll.scroll(halfPage);
-		else if (matchesKey(data, "ctrl+u")) scroll.scroll(-halfPage);
-		else if (matchesKey(data, "space")) scroll.page(1);
-		else if (data === "[") this.#jump(-1);
-		else if (data === "]") this.#jump(1);
-		else if (data === "g") scroll.scrollToTop();
-		else if (data === "G") scroll.scrollToBottom();
-		else if (data === "y") this.#copyCurrentTurn();
-		else if (data === "c") this.#options.openCopySelector?.();
-		else if (!scroll.handleScrollKey(data) && CONTROL_BYTES.test(data)) return undefined;
-		this.#host.ui.requestRender();
-		return CONSUMED;
-	}
-
-	#startReading(): void {
-		this.#readingFocus = this.#host.ui.getFocused();
-	}
-
-	#stopReading(): void {
-		this.#readingFocus = undefined;
-	}
-
-	/**
-	 * Leave read mode once another hosted component took the keys (a dialog
-	 * replaced the editor), so neither the help line nor the key routing
-	 * outlives it. Focus on the shell itself or an overlay above is transient.
-	 */
-	#endStaleReading(): boolean {
-		if (this.#readingFocus === undefined) return false;
-		const focused = this.#host.ui.getFocused();
-		if (!focused || focused === this.#readingFocus || !this.ownsOverlayFocusTarget(focused)) return false;
-		this.#stopReading();
-		return true;
+		return undefined;
 	}
 
 	/** Queue a jump to the previous (-1) or next (+1) prompt for the next frame. */
@@ -398,8 +335,6 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		} else if (event.leftClick && region === "rail") {
 			const turn = this.#railTurnAt(layout, event.row);
 			if (turn !== undefined) this.#scroll.setScrollOffset(jumpOffset(this.#turns[turn]!));
-		} else if (event.leftClick && region === "bottom") {
-			this.#stopReading();
 		} else {
 			return true;
 		}
@@ -501,18 +436,6 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		this.#host.ui.requestRender();
 	}
 
-	/** Read-mode `y`: the turn the viewport is in, prompt and answer. */
-	#copyCurrentTurn(): void {
-		const turns = this.#turns;
-		const turn = currentTurn(turns, this.#scroll.getScrollOffset());
-		if (turn === -1) {
-			this.#notice = "这里没有可复制的轮次";
-			return;
-		}
-		const end = turns[turn + 1]?.row ?? this.#contentRows.length;
-		this.#copy(rowsText(this.#contentRows, turns[turn]!.row, end), `已复制第 ${turn + 1} 轮`);
-	}
-
 	#copy(text: string, notice: string): void {
 		const copy = this.#options.copyToClipboard;
 		if (!copy) return;
@@ -562,7 +485,6 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		if (!this.#handle) return [];
 		const ui = this.#host.ui;
 		this.#recordHostedFocus();
-		this.#endStaleReading();
 		const top = this.#topVisibleOverlay();
 		if (top && top.component !== this && top.options?.fullscreen !== true) {
 			// An inline popup on top drops the terminal back to the normal buffer, where a
@@ -594,9 +516,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 			this.#contentRows = content;
 			this.#scroll.setLines(content);
 		}
-		// Read-mode help keeps its own row; the other hints cover the last content row while they show.
-		const reserved = this.#readingFocus === undefined ? 0 : 1;
-		this.#scroll.setHeight(Math.max(0, layout.bottomTop - reserved));
+		this.#scroll.setHeight(layout.bottomTop);
 		const anchored = anchor && this.#turns[anchor.turn];
 		if (anchored) this.#scroll.setScrollOffset(anchored.row + anchor.offset);
 		if (this.#pinToTail) {
@@ -644,8 +564,8 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	}
 
 	/**
-	 * One line on the last content row: the hovered prompt, a copy notice,
-	 * read-mode help, or how much is below (`hidden` rows, 0 at the end).
+	 * One line on the last content row: the hovered prompt, a copy notice, or
+	 * how much is below (`hidden` rows, 0 at the end).
 	 */
 	#statusHint(layout: WorkbenchLayout, hidden: number): string | undefined {
 		const row = this.#hoverRow;
@@ -656,13 +576,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 			return theme.fg("accent", `第 ${hover + 1}/${this.#turns.length} 轮 · ${this.#turns[hover]!.label}`);
 		}
 		if (this.#notice !== undefined) return theme.fg("success", this.#notice);
-		const more = hidden > 0 ? `↓ 下方还有 ${hidden} 行` : "";
-		if (this.#readingFocus !== undefined) {
-			const help = "阅读 · j/k 滚动 · [ ] 跳轮 · g/G 顶/底 · y 复制本轮 · c 复制菜单 · Esc 返回";
-			// The row count goes first: on a narrow terminal the help is what gets cut.
-			return theme.fg("dim", more ? `${more} · ${help}` : help);
-		}
-		return more ? theme.fg("dim", `${more} · 滚轮向下回到底部`) : undefined;
+		return hidden > 0 ? theme.fg("dim", `↓ 下方还有 ${hidden} 行 · 滚轮向下回到底部`) : undefined;
 	}
 
 	/**
