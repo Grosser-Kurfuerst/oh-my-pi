@@ -52,11 +52,6 @@ export interface WorkbenchShellOptions {
 	notify?(message: string): void;
 	/** Put text on the clipboard; without it a selection only highlights. */
 	copyToClipboard?(text: string): Promise<void>;
-	/**
-	 * `false` keeps terminal mouse reporting off, e.g. at startup prepaint, where
-	 * the tty is still in cooked mode and would echo every report onto the frame.
-	 */
-	mouseTracking?: boolean;
 }
 
 const WHEEL_STEP = 3;
@@ -86,7 +81,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	#host: WorkbenchHost;
 	#options: WorkbenchShellOptions;
 	readonly #scroll = new ScrollView([], { height: 0, scrollbar: "never", followTail: true });
-	/** Read by the TUI on every frame, so a rebind can turn mouse reporting on. */
+	/** Read by the TUI on every frame, so mouse reporting turns on with the first frame after enableInput(). */
 	readonly #overlayOptions: OverlayOptions;
 	#handle: OverlayHandle | undefined;
 	#focused = false;
@@ -136,8 +131,11 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 			maxHeight: "100%",
 			margin: 0,
 			fullscreen: true,
+			// Off while input is deferred (startup prepaint): the cooked tty would
+			// echo every report onto the frame. Re-read each frame, so it turns on
+			// with the render enableInput() requests.
 			get mouseTracking() {
-				return shell.#options.mouseTracking !== false;
+				return !shell.#host.ui.inputDeferred;
 			},
 		};
 	}

@@ -156,7 +156,7 @@ const MOUSE_ANY_MOTION_ON = "\x1b[?1003h";
 describe("workbench at startup", () => {
 	afterEach(() => stopPendingStartupComposer());
 
-	it("paints the prepaint frame fullscreen without mouse reporting, and the interactive mode takes that shell over", async () => {
+	it("paints the prepaint frame fullscreen, reports the mouse once input is raw, and the interactive mode takes that shell over", async () => {
 		useAppKeybindings();
 		const terminal = new CapturingTerminal(60, 12);
 		beginStartupComposer({ terminal, version: "9.9.9", cache: false, preferences: { quiet: true } });
@@ -173,14 +173,16 @@ describe("workbench at startup", () => {
 		const lease = takeStartupComposerLease()!;
 		cleanups.push(() => lease.composer.stop());
 		lease.adopt();
+		await terminal.waitForRender();
+		// Raw input arrived before the session: the wheel scrolls instead of sending arrow keys.
+		expect(terminal.raw).toContain(MOUSE_ANY_MOTION_ON);
 		const { mode, chatContainer } = mountMode(lease.composer, lease.composer.editor);
 		chatContainer.addChild({ render: () => ["answer 0"] });
 		const shell = installWorkbench(mode);
 		cleanups.push(() => shell.close());
 		terminal.sendInput("hello");
 		await terminal.waitForRender();
-		// One shell, now showing the transcript with mouse reporting on; a second one would stay stacked after the toggle.
-		expect(terminal.raw).toContain(MOUSE_ANY_MOTION_ON);
+		// One shell, now showing the transcript; a second one would stay stacked after the toggle.
 		expect(lease.composer.ui.overlayStack).toHaveLength(1);
 		expect(rowOf(terminal, "answer 0")).toBe(0);
 		expect(rowOf(terminal, "hello")).toBeGreaterThanOrEqual(terminal.rows - 4);

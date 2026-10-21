@@ -1160,6 +1160,11 @@ export class TUI extends Container {
 		return this.#fullRedrawCount;
 	}
 
+	/** True between a `deferInput` start() and enableInput(): the tty is still cooked. */
+	get inputDeferred(): boolean {
+		return this.#inputDeferred;
+	}
+
 	/** Shared budget that caps how many inline images render as live graphics. */
 	get imageBudget(): ImageBudget {
 		return this.#imageBudget;

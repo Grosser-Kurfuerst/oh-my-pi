@@ -28,8 +28,7 @@ export function openStartupWorkbench(composer: Composer): void {
 				},
 			},
 		};
-		// Input is still deferred (cooked tty); mouse reports would echo onto the frame until the takeover.
-		const shell = new WorkbenchShell(host, { mouseTracking: false });
+		const shell = new WorkbenchShell(host);
 		uninstall = shell.install();
 		shell.open();
 		startupShell = { shell, ui: composer.ui };
