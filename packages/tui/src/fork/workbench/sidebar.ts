@@ -43,6 +43,12 @@ const FOOTER_ROWS = 1;
 const WHEEL_STEP = 3;
 /** Confirm key for "new session", next to session paths. */
 const NEW_SESSION = "\0new";
+/**
+ * Emoji presentation selector. After a text-default pictograph (`🛰️`, titles
+ * get one from the title card) it is measured 2 columns wide, while many
+ * terminals advance 1 and shift the rest of the row; without it both say 1.
+ */
+const VS16 = /️/g;
 
 /** `now`, `3m`, `2h`, `5d`: age of a session at a glance. */
 export function relativeTime(date: Date, now: number): string {
@@ -279,7 +285,7 @@ export class SessionSidebar {
 		const time = relativeTime(session.modified, now);
 		const marker = current ? this.#currentMarker() : " ";
 		const nameWidth = Math.max(1, width - visibleWidth(marker) - 1 - 1 - visibleWidth(time));
-		const name = truncateToWidth(session.displayName, nameWidth);
+		const name = truncateToWidth(session.displayName.replace(VS16, ""), nameWidth);
 		const gap = padding(nameWidth - visibleWidth(name) + 1);
 		if (selected) return theme.inverse(`${marker} ${name}${gap}${time}`);
 		return `${current ? theme.fg("accent", marker) : marker} ${name}${gap}${theme.fg("dim", time)}`;

@@ -109,6 +109,13 @@ describe("workbench sidebar", () => {
 		expect(plain(s.view.render(30, 7, true))[6]).toBe("/ 过滤  n 新建");
 	});
 
+	it("drops the emoji presentation selector that terminals disagree on, so the row keeps its width", async () => {
+		const s = sidebar([session("🛰️ SUBA: probe", 5)]);
+		await s.view.refresh();
+		// `🛰️` measures 2 columns, `🛰` 1 like the terminals that ignore the selector.
+		expect(plain(s.view.render(30, 4, false))[2]).toBe("  🛰 SUBA: probe             5m");
+	});
+
 	it("asks for a second confirm before leaving a running turn, and lets an expired one lapse", async () => {
 		const s = sidebar([session("current", 0), session("other", 5)], "/sessions/current.jsonl");
 		await s.view.refresh();
