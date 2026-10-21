@@ -1,11 +1,12 @@
 # omp fork 改造说明
 
-本目录记录这个 fork（`Grosser-Kurfuerst/oh-my-pi`，`custom` 分支）对上游 omp 的改造。当前基于上游 `main` 的 `53a0377db6`（2026-10-19）。
+本目录记录这个 fork（`Grosser-Kurfuerst/oh-my-pi`，`custom` 分支）对上游 omp 的改造。`custom` 跟随上游的稳定版发布 tag，由 CI 自动合并，当前基于上游 `v18.12.5`。
 
 | 文档 | 内容 |
 |---|---|
 | 本文 | 改造点总览、上游触点、同步上游时可能冲突的地方 |
 | [workbench-plan.md](workbench-plan.md) | 全屏工作台的完整方案与迭代记录 |
+| [release-ci.md](release-ci.md) | 同步上游与构建发布的 CI 维护、本机 omp 的安装与更新 |
 
 ## 1. 改造点
 
@@ -22,7 +23,7 @@
 
 ### 1.2 自动更新指向 fork 的构建
 
-`omp update` 默认从本 fork `build-index` 分支上的静态构建索引安装，而不是上游的 `build.stencil.so`。仍可用 `PI_BUILD_URL` 覆盖。
+`omp update` 默认从本 fork `build-index` 分支上的静态构建索引安装，而不是上游的 `build.stencil.so`。仍可用 `PI_BUILD_URL` 覆盖。构建由 [fork-release.yml](../../.github/workflows/fork-release.yml) 自动发布，维护和使用方式见 [release-ci.md](release-ci.md)。
 
 ## 2. 代码布局
 
@@ -74,7 +75,7 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 
 ## 6. 同步上游检查清单
 
-1. 合并上游 `main`，按第 3 节处理触点冲突。
+1. CI 自动合并上游的稳定版 tag。合并冲突时在本地合并，按第 3 节处理触点冲突（流程见 [release-ci.md §7.1](release-ci.md)）。
 2. 在 `packages/tui` 和 `packages/coding-agent` 下分别运行 `bun run check`。
 3. 运行 fork 相关测试：
    - `packages/tui`：`bun test test/fork-workbench`
