@@ -123,6 +123,8 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	#autoScrollDelta: -1 | 1 = 1;
 	/** One-off status line (a copy result) shown until the next input. */
 	#notice: string | undefined;
+	/** The last frame showed "rows below" on the last content row; a click there scrolls to the bottom. */
+	#tailHintShown = false;
 
 	constructor(host: WorkbenchHost, options: WorkbenchShellOptions = {}) {
 		this.#host = host;
@@ -188,6 +190,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		this.#pendingJumps = 0;
 		this.#contentWidth = 0;
 		this.#hoverRow = undefined;
+		this.#tailHintShown = false;
 		this.#resetSelection();
 		this.#hostedFocus = undefined;
 		this.#hostedSlot = [];
@@ -326,6 +329,8 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		if (event.leftClick) this.#dismissSelection();
 		if (event.wheel !== null) {
 			this.#scroll.scroll(event.wheel * WHEEL_STEP);
+		} else if (event.leftClick && region === "content" && this.#tailHintShown && event.row === layout.bottomTop - 1) {
+			this.#scroll.scrollToBottom();
 		} else if (event.leftClick && region === "content") {
 			const cell = this.#cellAt(layout, event.row, event.col);
 			if (cell) {
@@ -546,7 +551,10 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		while (lines.length < layout.bottomTop) lines.push("");
 		const below = this.#contentRows.length - this.#scroll.getVisibleRange().end;
 		// A hint on the last content row hides that row too.
-		const hint = this.#statusHint(layout, below > 0 ? below + (covers ? 1 : 0) : 0);
+		const hidden = below > 0 ? below + (covers ? 1 : 0) : 0;
+		const notice = this.#statusHint(layout);
+		this.#tailHintShown = notice === undefined && hidden > 0 && layout.bottomTop > 0;
+		const hint = this.#tailHintShown ? theme.fg("dim", `↓ 下方还有 ${hidden} 行 · 点击回到底部`) : notice;
 		if (hint && layout.bottomTop > 0) lines[layout.bottomTop - 1] = truncateToWidth(hint, width);
 		const rail = layout.rail;
 		if (!rail) return lines;
@@ -563,11 +571,8 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		return lines.map((line, y) => `${line}${padding(width - visibleWidth(line))}${gap}${cells[y] ?? ""}`);
 	}
 
-	/**
-	 * One line on the last content row: the hovered prompt, a copy notice, or
-	 * how much is below (`hidden` rows, 0 at the end).
-	 */
-	#statusHint(layout: WorkbenchLayout, hidden: number): string | undefined {
+	/** The hovered prompt or a copy notice for the last content row; either one covers the "rows below" hint. */
+	#statusHint(layout: WorkbenchLayout): string | undefined {
 		const row = this.#hoverRow;
 		// A resize can drop the rail or shrink the content area under a stale pointer row.
 		const onRail = row !== undefined && layout.rail !== undefined && row < layout.bottomTop;
@@ -575,8 +580,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		if (hover !== undefined) {
 			return theme.fg("accent", `第 ${hover + 1}/${this.#turns.length} 轮 · ${this.#turns[hover]!.label}`);
 		}
-		if (this.#notice !== undefined) return theme.fg("success", this.#notice);
-		return hidden > 0 ? theme.fg("dim", `↓ 下方还有 ${hidden} 行 · 滚轮向下回到底部`) : undefined;
+		return this.#notice === undefined ? undefined : theme.fg("success", this.#notice);
 	}
 
 	/**

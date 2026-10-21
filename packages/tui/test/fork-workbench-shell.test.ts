@@ -241,6 +241,43 @@ describe("workbench shell", () => {
 		expect(plain(h.terminal.getViewport())).not.toContain("late 0");
 	});
 
+	it("scrolls back to the bottom and follows again when the rows-below hint is clicked", async () => {
+		const copied: string[] = [];
+		const h = harness({
+			copyToClipboard: async text => {
+				copied.push(text);
+			},
+		});
+		addRows(h.transcript, "row", 40);
+		await h.settle();
+		h.shell.open();
+		await h.settle();
+		h.terminal.sendInput("\x1b[<64;5;3M");
+		await h.settle();
+		const hintRow = plain(h.terminal.getViewport()).findIndex(row => row.startsWith("↓ 下方还有"));
+		expect(hintRow).toBeGreaterThan(-1);
+
+		h.terminal.sendInput(mouse("press", 4, hintRow));
+		h.terminal.sendInput(mouse("release", 4, hintRow));
+		await h.settle();
+		const bottom = plain(h.terminal.getViewport());
+		expect(bottom).toContain("row 39");
+		expect(bottom.some(row => row.startsWith("↓ 下方还有"))).toBe(false);
+		// Back at the tail, new output is followed again.
+		addRows(h.transcript, "late", 1);
+		h.composer.ui.requestRender();
+		await h.settle();
+		// With the hint gone, its row is content again: a double click there selects a word.
+		const last = rowOf(h.terminal, "late 0");
+		expect(last).toBe(hintRow);
+		for (let click = 0; click < 2; click++) {
+			h.terminal.sendInput(mouse("press", 1, last));
+			h.terminal.sendInput(mouse("release", 1, last));
+		}
+		await h.settle();
+		expect(copied).toEqual(["late"]);
+	});
+
 	it("drops the replaced session from native history when a clear lands while open", async () => {
 		const h = harness();
 		addRows(h.transcript, "old", 20);
