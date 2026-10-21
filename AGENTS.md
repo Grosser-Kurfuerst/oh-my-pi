@@ -344,3 +344,16 @@ Location: `packages/*/CHANGELOG.md` (per package).
 2. Run `bun run release`.
 
 The script handles version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+
+## Fork 改造（custom 分支）
+
+本仓库是上游 omp 的 fork，`custom` 分支会定期合并上游 `main`。
+
+- 改造要尽可能少地与上游代码冲突：
+  - fork 自有代码放在各包的 `src/fork/` 下，测试文件名以 `fork-` 开头；
+  - 必须改上游文件时只加最小的接入点（通常是一处调用加一个 import），并加 `// Fork:` 注释指向 `docs/fork/README.md`；
+  - 不重排、不重新格式化上游代码，不往上游的 CHANGELOG 加条目。
+- 每次改造都要在 `docs/fork/README.md` 里简要说明：
+  - 改造点：做了什么；
+  - 上游触点：改了哪个上游文件、冲突风险、丢失后的表现；
+  - 不冲突但上游一改就可能悄悄失效的依赖。
