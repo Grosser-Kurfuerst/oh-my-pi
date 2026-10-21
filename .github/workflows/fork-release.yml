@@ -29,6 +29,8 @@ jobs:
     timeout-minutes: 60
     env:
       GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+      # 有 upstream remote 时 gh 会优先把它当目标仓库，必须显式指定 fork 本身
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
         with:
