@@ -72,6 +72,7 @@ function harness() {
 		openExternalEditor: () => calls.push("external"),
 		resetDisplayAfterAppearanceRefresh: () => calls.push("reset"),
 		toggleToolOutputExpansion: () => calls.push("expand"),
+		showCopySelector: () => calls.push("copy"),
 	};
 	const shell = installWorkbench(mode);
 	cleanups.push(() => shell.close());

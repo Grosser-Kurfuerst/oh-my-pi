@@ -8,6 +8,7 @@ import type { AppKeybinding } from "@oh-my-pi/pi-tui/app-keybindings";
 import { type WorkbenchHost, WorkbenchShell } from "@oh-my-pi/pi-tui/fork/workbench/shell";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
+import { copyToClipboard } from "../utils/clipboard";
 
 /** The InteractiveMode surface the workbench needs. */
 export interface WorkbenchMode extends WorkbenchHost {
@@ -18,6 +19,7 @@ export interface WorkbenchMode extends WorkbenchHost {
 	openExternalEditor(): void;
 	resetDisplayAfterAppearanceRefresh(): void;
 	toggleToolOutputExpansion(): void;
+	showCopySelector(): void;
 }
 
 /**
@@ -42,7 +44,11 @@ function expandFocusedDialog(focused: Component | null): boolean {
 
 /** Install the workbench toggle on a fully initialized interactive mode. */
 export function installWorkbench(mode: WorkbenchMode): WorkbenchShell {
-	const shell = new WorkbenchShell(mode, { notify: message => mode.showWarning(message) });
+	const shell = new WorkbenchShell(mode, {
+		notify: message => mode.showWarning(message),
+		copyToClipboard,
+		openCopySelector: () => mode.showCopySelector(),
+	});
 	shell.install();
 	// Registered after upstream's listeners, so it only sees keys they passed on.
 	mode.ui.addInputListener(data => {

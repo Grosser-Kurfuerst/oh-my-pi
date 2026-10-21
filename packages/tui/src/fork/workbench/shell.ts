@@ -4,7 +4,8 @@
  * are only read and rendered, never modified: the transcript and the roots
  * above it become a scrollable content area, the roots below it (HUDs,
  * editor, status line) stay pinned at the bottom. A one-column rail beside
- * the content marks every user prompt and jumps to it on click.
+ * the content marks every user prompt and jumps to it on click. Dragging over
+ * the content selects text and copies it on release (OSC 52 via the host).
  *
  * While the shell owns the alternate screen the composer commits no native
  * history; closing it hands the normal buffer back and the composer catches up.
@@ -36,6 +37,7 @@ import {
 import { padding, truncateToWidth, visibleWidth } from "../../utils";
 import { clampBottomRows, computeLayout, contentColumn, mainColumn, regionAt, type WorkbenchLayout } from "./layout";
 import { nearestTurn, renderRail } from "./rail";
+import { type CellPoint, highlightRow, LINE_END, MouseSelection, rowSpan, rowsText, selectedText } from "./selection";
 import { currentTurn, isUserTurnBlock, jumpOffset, promptLabel, type TurnEntry, turnTarget } from "./turn-index";
 
 /** The parts of InteractiveMode the shell reads; InteractiveMode satisfies it structurally. */
@@ -48,6 +50,10 @@ export interface WorkbenchHost {
 export interface WorkbenchShellOptions {
 	/** Show a short user-facing notice (e.g. why the shell cannot open). */
 	notify?(message: string): void;
+	/** Put text on the clipboard; without it a selection only highlights. */
+	copyToClipboard?(text: string): Promise<void>;
+	/** Open the app's message-level copy picker (read-mode `c`). */
+	openCopySelector?(): void;
 }
 
 const SHELL_OVERLAY: OverlayOptions = {
@@ -59,6 +65,8 @@ const SHELL_OVERLAY: OverlayOptions = {
 };
 
 const WHEEL_STEP = 3;
+/** Auto-scroll cadence while a drag holds the pointer on the top or bottom content row. */
+const AUTO_SCROLL_MS = 50;
 /** Matches the shared tool spinner cadence so animated blocks agree on their frame. */
 const ANIMATION_TICK_MS = 80;
 /** How often a shell hidden behind an inline popup checks whether it may come back. */
@@ -83,7 +91,7 @@ type OverlayEntry = TUI["overlayStack"][number];
 
 export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	readonly #host: WorkbenchHost;
-	readonly #notify: ((message: string) => void) | undefined;
+	readonly #options: WorkbenchShellOptions;
 	readonly #scroll = new ScrollView([], { height: 0, scrollbar: "never", followTail: true });
 	#handle: OverlayHandle | undefined;
 	#focused = false;
@@ -118,10 +126,17 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	#hostedSlot: readonly Component[] = [];
 	/** Transcript root last found in `ui.children`. */
 	#transcript: TranscriptContainer | undefined;
+	readonly #selection = new MouseSelection();
+	/** Screen cell of the pointer during a drag; auto-scroll re-resolves it after every step. */
+	#dragPointer: { readonly row: number; readonly col: number } | undefined;
+	#autoScroll: NodeJS.Timeout | undefined;
+	#autoScrollDelta: -1 | 1 = 1;
+	/** One-off status line (a copy result) shown until the next input. */
+	#notice: string | undefined;
 
 	constructor(host: WorkbenchHost, options: WorkbenchShellOptions = {}) {
 		this.#host = host;
-		this.#notify = options.notify;
+		this.#options = options;
 	}
 
 	/** Register the shell's input routing; returns a disposer. */
@@ -149,7 +164,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	open(): boolean {
 		if (this.#handle) return true;
 		if (isNativeRendering()) {
-			this.#notify?.("工作台不支持当前的原生渲染模式");
+			this.#options.notify?.("工作台不支持当前的原生渲染模式");
 			return false;
 		}
 		const ui = this.#host.ui;
@@ -184,6 +199,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		this.#contentWidth = 0;
 		this.#readingFocus = undefined;
 		this.#hoverRow = undefined;
+		this.#resetSelection();
 		this.#hostedFocus = undefined;
 		this.#hostedSlot = [];
 		this.#transcript = undefined;
@@ -276,6 +292,8 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 			routeSgrMouseInput(data, event => this.#handleMouse(event));
 			return CONSUMED;
 		}
+		// Any key ends a finished selection, like in a terminal; the key itself still goes through.
+		this.#dismissSelection();
 		if (keybindings.matches(data, "fork.workbench.toggle")) {
 			this.close();
 			return CONSUMED;
@@ -312,6 +330,8 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		else if (data === "]") this.#jump(1);
 		else if (data === "g") scroll.scrollToTop();
 		else if (data === "G") scroll.scrollToBottom();
+		else if (data === "y") this.#copyCurrentTurn();
+		else if (data === "c") this.#options.openCopySelector?.();
 		else if (!scroll.handleScrollKey(data) && CONTROL_BYTES.test(data)) return undefined;
 		this.#host.ui.requestRender();
 		return CONSUMED;
@@ -362,11 +382,19 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	#handleMouse(event: SgrMouseEvent): boolean {
 		const layout = this.#layout;
 		if (!layout) return false;
+		if (this.#selection.isHeld) return this.#handleDrag(layout, event);
 		const region = regionAt(layout, event.row, event.col);
 		this.#setHoverRow(region === "rail" ? event.row : undefined);
 		if (region === "outside") return false;
+		if (event.leftClick) this.#dismissSelection();
 		if (event.wheel !== null) {
 			this.#scroll.scroll(event.wheel * WHEEL_STEP);
+		} else if (event.leftClick && region === "content") {
+			const cell = this.#cellAt(layout, event.row, event.col);
+			if (cell) {
+				this.#selection.press(cell, this.#contentRows[cell.row] ?? "", performance.now());
+				this.#dragPointer = { row: event.row, col: event.col };
+			}
 		} else if (event.leftClick && region === "rail") {
 			const turn = this.#railTurnAt(layout, event.row);
 			if (turn !== undefined) this.#scroll.setScrollOffset(jumpOffset(this.#turns[turn]!));
@@ -377,6 +405,133 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		}
 		this.#host.ui.requestRender();
 		return true;
+	}
+
+	/** Reports while the button is held after a press in the content: extend, scroll, or finish. */
+	#handleDrag(layout: WorkbenchLayout, event: SgrMouseEvent): boolean {
+		if (event.release) {
+			this.#finishDrag();
+		} else if (event.motion && (event.button & 3) === 3) {
+			// Motion with no button: the release went elsewhere (an overlay took the screen). Stop extending.
+			this.#cancelDrag();
+			return this.#handleMouse(event);
+		} else if (event.motion || event.wheel !== null) {
+			if (event.wheel !== null) this.#scroll.scroll(event.wheel * WHEEL_STEP);
+			else this.#dragPointer = { row: event.row, col: event.col };
+			this.#extendToPointer(layout);
+			this.#updateAutoScroll();
+		} else {
+			// A press without the release before it (lost outside the window): end the old drag, start over.
+			this.#finishDrag();
+			return this.#handleMouse(event);
+		}
+		this.#host.ui.requestRender();
+		return true;
+	}
+
+	/**
+	 * The content cell under a screen position. Rows above or below the visible
+	 * content clamp to its first or last row, columns right of it to the line end.
+	 */
+	#cellAt(layout: WorkbenchLayout, row: number, col: number): CellPoint | undefined {
+		const { start, end } = this.#scroll.getVisibleRange();
+		if (end <= start) return undefined;
+		const last = end - start - 1;
+		const x = col - layout.content.x;
+		if (row > last) return { row: end - 1, col: LINE_END };
+		return { row: start + Math.max(0, row), col: x >= layout.content.width ? LINE_END : Math.max(0, x) };
+	}
+
+	#extendToPointer(layout: WorkbenchLayout): void {
+		const pointer = this.#dragPointer;
+		const cell = pointer && this.#cellAt(layout, pointer.row, pointer.col);
+		if (cell) this.#selection.drag(cell);
+	}
+
+	/** Holding a growing drag on the top content row, or below the last one, keeps scrolling that way. */
+	#updateAutoScroll(): void {
+		const row = this.#dragPointer?.row;
+		const { start, end } = this.#scroll.getVisibleRange();
+		const last = end - start - 1;
+		if (row === undefined || !this.#selection.isExtending || last <= 0 || (row > 0 && row <= last)) {
+			this.#stopAutoScroll();
+			return;
+		}
+		this.#autoScrollDelta = row <= 0 ? -1 : 1;
+		if (this.#autoScroll) return;
+		this.#autoScroll = setInterval(() => this.#autoScrollStep(), AUTO_SCROLL_MS);
+		this.#autoScroll.unref?.();
+	}
+
+	#autoScrollStep(): void {
+		// A fullscreen overlay above took the screen (and maybe the release): do not scroll what it covers.
+		if (!this.isFrontmost) {
+			this.#stopAutoScroll();
+			return;
+		}
+		const layout = this.#layout;
+		const before = this.#scroll.getScrollOffset();
+		this.#scroll.scroll(this.#autoScrollDelta);
+		if (!layout || this.#scroll.getScrollOffset() === before) return;
+		this.#extendToPointer(layout);
+		this.#host.ui.requestRender();
+	}
+
+	#stopAutoScroll(): void {
+		if (!this.#autoScroll) return;
+		clearInterval(this.#autoScroll);
+		this.#autoScroll = undefined;
+	}
+
+	/** Release: copy what the drag or multi-click selected; the highlight stays until the next input. */
+	#finishDrag(): void {
+		this.#stopAutoScroll();
+		this.#dragPointer = undefined;
+		const range = this.#selection.release();
+		const text = range ? selectedText(this.#contentRows, range) : "";
+		if (text.trim()) this.#copy(text, `已复制 ${text.split("\n").length} 行`);
+		else this.#selection.clear();
+	}
+
+	/** Drop a drag whose release never arrived, without copying what it held. */
+	#cancelDrag(): void {
+		this.#stopAutoScroll();
+		this.#dragPointer = undefined;
+		this.#selection.clear();
+		this.#host.ui.requestRender();
+	}
+
+	/** Read-mode `y`: the turn the viewport is in, prompt and answer. */
+	#copyCurrentTurn(): void {
+		const turns = this.#turns;
+		const turn = currentTurn(turns, this.#scroll.getScrollOffset());
+		if (turn === -1) {
+			this.#notice = "这里没有可复制的轮次";
+			return;
+		}
+		const end = turns[turn + 1]?.row ?? this.#contentRows.length;
+		this.#copy(rowsText(this.#contentRows, turns[turn]!.row, end), `已复制第 ${turn + 1} 轮`);
+	}
+
+	#copy(text: string, notice: string): void {
+		const copy = this.#options.copyToClipboard;
+		if (!copy) return;
+		copy(text).catch(err => logger.warn("Workbench failed to copy to the clipboard", { error: String(err) }));
+		this.#notice = notice;
+	}
+
+	/** Drop a finished selection and the copy notice; repaints only when either was showing. */
+	#dismissSelection(): void {
+		if (this.#selection.isHeld || (!this.#selection.range && this.#notice === undefined)) return;
+		this.#resetSelection();
+		this.#host.ui.requestRender();
+	}
+
+	#resetSelection(): void {
+		this.#selection.clear();
+		this.#stopAutoScroll();
+		this.#dragPointer = undefined;
+		this.#notice = undefined;
 	}
 
 	#railTurnAt(layout: WorkbenchLayout, row: number): number | undefined {
@@ -431,6 +586,8 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 
 		// No transcript mounted (never after init): everything scrolls, nothing is pinned.
 		const headRoots = chatIndex === -1 ? roots : roots.slice(0, chatIndex);
+		// Logical rows move when the width reflows them; a selection over them would point at other text.
+		if (contentWidth !== this.#contentWidth) this.#resetSelection();
 		const anchor = this.#takeReflowAnchor(contentWidth);
 		const content = this.#renderContent(headRoots, chat?.children ?? [], contentWidth);
 		if (content !== this.#contentRows) {
@@ -457,6 +614,14 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	#renderViewport(layout: WorkbenchLayout): string[] {
 		const width = layout.content.width;
 		const lines = [...this.#scroll.render(width)];
+		const range = this.#selection.range;
+		if (range) {
+			const first = this.#scroll.getVisibleRange().start;
+			lines.forEach((line, y) => {
+				const span = rowSpan(range, first + y);
+				if (span) lines[y] = highlightRow(line, span[0], span[1]);
+			});
+		}
 		const covers = lines.length === layout.bottomTop;
 		while (lines.length < layout.bottomTop) lines.push("");
 		const below = this.#contentRows.length - this.#scroll.getVisibleRange().end;
@@ -479,8 +644,8 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	}
 
 	/**
-	 * One line on the last content row: the hovered prompt, read-mode help, or
-	 * how much is below (`hidden` rows, 0 at the end).
+	 * One line on the last content row: the hovered prompt, a copy notice,
+	 * read-mode help, or how much is below (`hidden` rows, 0 at the end).
 	 */
 	#statusHint(layout: WorkbenchLayout, hidden: number): string | undefined {
 		const row = this.#hoverRow;
@@ -490,10 +655,12 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		if (hover !== undefined) {
 			return theme.fg("accent", `第 ${hover + 1}/${this.#turns.length} 轮 · ${this.#turns[hover]!.label}`);
 		}
+		if (this.#notice !== undefined) return theme.fg("success", this.#notice);
 		const more = hidden > 0 ? `↓ 下方还有 ${hidden} 行` : "";
 		if (this.#readingFocus !== undefined) {
-			const help = "阅读 · j/k 滚动 · [ ] 跳轮 · g/G 顶/底 · Esc 返回";
-			return theme.fg("dim", more ? `${help} · ${more}` : help);
+			const help = "阅读 · j/k 滚动 · [ ] 跳轮 · g/G 顶/底 · y 复制本轮 · c 复制菜单 · Esc 返回";
+			// The row count goes first: on a narrow terminal the help is what gets cut.
+			return theme.fg("dim", more ? `${more} · ${help}` : help);
 		}
 		return more ? theme.fg("dim", `${more} · 滚轮向下回到底部`) : undefined;
 	}

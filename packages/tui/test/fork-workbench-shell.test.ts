@@ -4,7 +4,7 @@ import { SkillMessageComponent } from "@oh-my-pi/pi-tui/chat/skill-message";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { clampBottomRows, computeLayout, regionAt } from "@oh-my-pi/pi-tui/fork/workbench/layout";
-import { WorkbenchShell } from "@oh-my-pi/pi-tui/fork/workbench/shell";
+import { WorkbenchShell, type WorkbenchShellOptions } from "@oh-my-pi/pi-tui/fork/workbench/shell";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import {
@@ -71,7 +71,7 @@ function nativeHistory(terminal: VirtualTerminal): string[] {
 	return plain(terminal.getScrollBuffer().slice(0, -terminal.rows));
 }
 
-function harness() {
+function harness(options?: WorkbenchShellOptions) {
 	const terminal = new VirtualTerminal(COLUMNS, ROWS);
 	const scheduler = new VirtualRenderScheduler();
 	const composer = new Composer({
@@ -88,7 +88,7 @@ function harness() {
 	composer.ui.setFocus(editor);
 	// Mutable like InteractiveMode: a session rebuild repoints chatContainer at a staged container.
 	const host = { ui: composer.ui, chatContainer: transcript, editorContainer };
-	const shell = new WorkbenchShell(host);
+	const shell = new WorkbenchShell(host, options);
 	const uninstall = shell.install();
 	const settle = () => scheduler.settle(terminal);
 	cleanups.push(() => {
@@ -317,9 +317,10 @@ const ESC = "\x1b";
 /** 0-based screen column of the rail cell. */
 const RAIL_COL = COLUMNS - 1;
 
-/** SGR mouse report at a 0-based cell: left press, or pointer motion with no button held. */
-function mouse(kind: "press" | "move", col: number, row: number): string {
-	return `\x1b[<${kind === "press" ? 0 : 35};${col + 1};${row + 1}M`;
+/** SGR mouse report at a 0-based cell: left press/release, motion with no button or the left one held. */
+function mouse(kind: "press" | "move" | "drag" | "release", col: number, row: number): string {
+	const button = { press: 0, move: 35, drag: 32, release: 0 }[kind];
+	return `\x1b[<${button};${col + 1};${row + 1}${kind === "release" ? "m" : "M"}`;
 }
 
 /**
@@ -524,5 +525,117 @@ describe("workbench layout", () => {
 		expect(regionAt(layout, 6, 38)).toBe("rail");
 		expect(regionAt(layout, 6, 39)).toBe("rail");
 		expect(regionAt(computeLayout(12, 10, 3), 6, 11)).toBe("content");
+	});
+});
+
+describe("workbench selection", () => {
+	function copyHarness() {
+		const copied: string[] = [];
+		let pickers = 0;
+		const h = harness({
+			copyToClipboard: async text => {
+				copied.push(text);
+			},
+			openCopySelector: () => pickers++,
+		});
+		const send = async (data: string) => {
+			h.terminal.sendInput(data);
+			await h.settle();
+		};
+		return { ...h, copied, send, pickers: () => pickers };
+	}
+
+	it("keeps scrolling while a drag rests on the top row and copies every row it passed", async () => {
+		useAppKeybindings();
+		const h = copyHarness();
+		// One block, so rows are not separated by blank lines.
+		const block = Array.from({ length: 40 }, (_, i) => `row ${i}`);
+		h.transcript.addChild({ render: () => block });
+		h.shell.open();
+		await h.settle();
+		const pressed = plain(h.terminal.getViewport())[3]!;
+		const pressedIndex = Number(pressed.split(" ")[1]);
+
+		// Past the row's text: the whole row is selected.
+		await h.send(mouse("press", 20, 3));
+		await h.send(mouse("drag", 0, 0));
+		await Bun.sleep(300);
+		await h.settle();
+		await h.send(mouse("release", 0, 0));
+
+		expect(h.copied).toHaveLength(1);
+		const lines = h.copied[0]!.split("\n");
+		const firstIndex = Number(lines[0]!.split(" ")[1]);
+		// The viewport top held row pressedIndex - 3; auto-scroll reached rows above it.
+		expect(firstIndex).toBeLessThan(pressedIndex - 3);
+		expect(lines).toEqual(Array.from({ length: pressedIndex - firstIndex + 1 }, (_, i) => `row ${firstIndex + i}`));
+		expect(rowOf(h.terminal, `已复制 ${lines.length} 行`)).toBeGreaterThan(-1);
+		expect(h.shell.render(COLUMNS).some(line => line.includes("\x1b[7mrow"))).toBe(true);
+
+		// The next key drops the highlight and the notice, and still reaches the editor.
+		await h.send("x");
+		expect(h.editor.typed).toBe("x");
+		expect(rowOf(h.terminal, "已复制")).toBe(-1);
+		expect(h.shell.render(COLUMNS).some(line => line.includes("\x1b[7m"))).toBe(false);
+	});
+
+	it("drops a drag whose release went elsewhere instead of copying what the pointer hovers later", async () => {
+		useAppKeybindings();
+		const h = copyHarness();
+		const block = Array.from({ length: 40 }, (_, i) => `row ${i}`);
+		h.transcript.addChild({ render: () => block });
+		h.shell.open();
+		await h.settle();
+
+		await h.send(mouse("press", 0, 3));
+		await h.send(mouse("drag", 3, 5));
+		// The next report is a plain move: the button came up while something else had the pointer.
+		await h.send(mouse("move", 3, 0));
+		await Bun.sleep(150);
+		await h.settle();
+		expect(h.shell.render(COLUMNS).some(line => line.includes("\x1b[7m"))).toBe(false);
+		await h.send(mouse("press", 0, 6));
+		await h.send(mouse("release", 0, 6));
+		expect(h.copied).toEqual([]);
+		// It did not keep scrolling either: the tail is still in view.
+		expect(rowOf(h.terminal, "row 39")).toBeGreaterThan(-1);
+	});
+
+	it("copies the word on a double click and the row on a triple click; a plain click copies nothing", async () => {
+		useAppKeybindings();
+		const h = copyHarness();
+		h.transcript.addChild({ render: () => ["alpha beta gamma"] });
+		h.shell.open();
+		await h.settle();
+		const row = rowOf(h.terminal, "alpha beta");
+		const click = async () => {
+			await h.send(mouse("press", 7, row));
+			await h.send(mouse("release", 7, row));
+		};
+		await click();
+		expect(h.copied).toEqual([]);
+		await click();
+		await click();
+		expect(h.copied).toEqual(["beta", "alpha beta gamma"]);
+	});
+
+	it("copies the turn being read with y and opens the message picker with c", async () => {
+		useAppKeybindings();
+		const h = copyHarness();
+		addConversation(h.transcript);
+		await h.settle();
+		await h.send(CTRL_UP);
+		await h.send("y");
+		expect(h.copied).toHaveLength(1);
+		// The turn as rendered: from its prompt bubble to the end of its answer, nothing of the turn before.
+		const turn = h.copied[0]!;
+		expect(turn).toContain("second prompt");
+		expect(turn.endsWith("answer-b 19")).toBe(true);
+		expect(turn).not.toContain("answer-s");
+		expect(rowOf(h.terminal, "已复制第 3 轮")).toBeGreaterThan(-1);
+
+		await h.send("c");
+		expect(h.pickers()).toBe(1);
+		expect(h.editor.typed).toBe("");
 	});
 });
