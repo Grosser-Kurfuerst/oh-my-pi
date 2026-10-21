@@ -18,7 +18,7 @@
 - **M3 鼠标选择与复制**：拖选文字，松开后复制到剪贴板。
 - **M3 之后**：默认打开、移除阅读模式、启动预绘制时就进入全屏，鼠标上报在切到 raw 输入时打开。
 - **M4 会话侧边栏**：左侧列出当前项目的会话，单击或回车切换，`/` 过滤，`n` 新建；当前回合运行中切换要二次确认。窄于 100 列时自动收起，`f2` 聚焦、收起或展开。
-- **M5 收尾**：设置项 `fork.workbench.enabled`（总开关）、`fork.workbench.autoOpen`（启动即进入），下次启动生效；`/hotkeys` 增加 Workbench 分组；CHANGELOG 条目。
+- **M5 收尾**：设置项 `fork.workbench.enabled`（总开关）、`fork.workbench.autoOpen`（启动即进入），下次启动生效；`/hotkeys` 增加 Workbench 分组。
 
 ### 1.2 自动更新指向 fork 的构建
 
@@ -44,7 +44,6 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 | ③ | [all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts) | `DOMAINS` 末尾加 `forkWorkbenchSettings`，+1 import | 6 | 低 | 设置面板和 `omp config` 里看不到这两项；配置文件里的值仍然生效（`fork/workbench.ts` 直接 import 了设置模块）。**没有测试守护**，同步后用 `omp config list \| grep workbench` 确认 |
 | ⑥ | [tui.ts:1164](../../packages/tui/src/tui.ts:1164) | 新增只读 getter `inputDeferred` | 67 | 低：纯新增，只有上游改到相邻的 getter 才会冲突 | 上游改名或删掉 `#inputDeferred` 时 `bun run check` 报错 |
 | ⑦ | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts) | `hotkeyGroups` 返回前追加 `forkHotkeyGroup(...)`，+1 import | 5 | 低 | `/hotkeys` 不再列出工作台快捷键；`fork-workbench-hotkeys.test.ts` 会失败 |
-| — | [CHANGELOG.md](../../packages/coding-agent/CHANGELOG.md) | `[Unreleased]` 下的 workbench 条目 | 高 | 高：上游每次发版都改这里 | 冲突时保留这一行；上游发版会把 `[Unreleased]` 改成版本号，fork 条目要挪回新的 `[Unreleased]` |
 | — | [build-service.ts:49](../../packages/coding-agent/src/cli/build-service.ts:49) | `DEFAULT_BUILD_URL` 改为 fork 构建索引；测试改为引用该常量 | 1 | 低 | 冲突时**必须保留 fork 的地址**，否则 `omp update` 会装回上游版本 |
 
 还改了一个上游测试：[issue-9597-cold-launch-double-clear.test.ts:128](../../packages/coding-agent/test/issue-9597-cold-launch-double-clear.test.ts:128)（近 30 天 4 次）。它检查冷启动只清屏一次；工作台打开期间清屏被推迟，所以断言前先关闭启动外壳（带 `Fork:` 注释）。上游改这个测试时会冲突，保留这几行即可。

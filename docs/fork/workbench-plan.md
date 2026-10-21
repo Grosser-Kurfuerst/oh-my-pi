@@ -601,7 +601,7 @@ M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Dis
 - 决定是否把默认打开做成 `autoOpen` 设置（默认打开已在 M3 之后实现）。预绘制早于 Settings 加载，`autoOpen`、`enabled` 要像 ComposerCache 那样缓存到预绘制阶段可读；否则只能在接管时再关闭，"先全屏再退回"的闪变又会回来。
 - 把工作台快捷键（`ctrl+n`、`ctrl+up`、`ctrl+down`、`f2` 等）的说明加入 `/hotkeys`。
 - 在 `fork/workbench/index.ts` 顶部写上游 API 依赖清单（§11）。
-- 在 `packages/coding-agent/CHANGELOG.md` 的 `[Unreleased]` 下增加 `### Added` 条目。
+- ~~在 `packages/coding-agent/CHANGELOG.md` 的 `[Unreleased]` 下增加 `### Added` 条目。~~ 不做，见 M5 实施记录。
 - 根据 M1～M4 的实际结果更新本文档。
 
 **验收**：
@@ -620,7 +620,7 @@ M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Dis
 - **缓存过期**：不经过运行中的 omp 改设置（`omp config set`、手动编辑配置文件）后的第一次启动，预绘制仍按旧缓存行事。缓存是全局一份，两个项目的项目级设置不同时，交替启动每次都会这样。缓存说打开、设置说关闭时，接管时关闭外壳（`autoOpen` 关闭）或连输入路由一起移除（`enabled` 关闭），会闪一次；之后缓存已更新。
 - **`/hotkeys`**：新触点 ⑦。分组内容在 `tui/src/fork/hotkeys.ts`：四个工作台快捷键取实际绑定，另有侧边栏按键（`/`、`n`、回车、Esc）和鼠标操作两行说明。
 - **依赖清单**：写在 `tui/src/fork/workbench/index.ts` 顶部，只列 API 名称，位置见 §11。
-- **CHANGELOG**：`packages/coding-agent/CHANGELOG.md` 的 `[Unreleased]` 下加了 `### Added`。上游每次发版都会改这里，同步时容易冲突，保留 fork 的那一行即可。
+- **CHANGELOG**：不写。上游几乎每个提交和每次发版都改 `[Unreleased]`，fork 条目每次同步都会冲突；fork 的构建也不走上游发版流程，改动记录在 `docs/fork/README.md`。
 
 ---
 
@@ -646,7 +646,7 @@ M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Dis
 
 **同步上游的流程**：
 
-1. 合并上游后，冲突只可能出现在触点 ① ② ③ ⑤ ⑥ ⑦（以及可选的 ④）和 CHANGELOG 的几行上，手动保留即可。
+1. 合并上游后，冲突只可能出现在触点 ① ② ③ ⑤ ⑥ ⑦（以及可选的 ④）上，手动保留即可。
 2. 运行 `bun check` 和外壳的集成测试，它们能发现上游内部 API 的漂移（见 §11）。
 3. 有 API 变化时，对照 `fork/workbench/index.ts` 顶部的依赖清单逐项修复。
 
