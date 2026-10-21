@@ -6,6 +6,7 @@
  * editor, status line) stay pinned at the bottom. A one-column rail beside
  * the content marks every user prompt and jumps to it on click. Dragging over
  * the content selects text and copies it on release (OSC 52 via the host).
+ * With session deps from the host, a session list runs down the left edge.
  *
  * While the shell owns the alternate screen the composer commits no native
  * history; closing it hands the normal buffer back and the composer catches up.
@@ -33,9 +34,19 @@ import {
 	type TUI,
 } from "../../tui";
 import { padding, truncateToWidth, visibleWidth } from "../../utils";
-import { clampBottomRows, computeLayout, contentColumn, mainColumn, regionAt, type WorkbenchLayout } from "./layout";
+import {
+	clampBottomRows,
+	computeLayout,
+	contentColumn,
+	mainColumn,
+	regionAt,
+	SIDEBAR_AUTO_COLUMNS,
+	sidebarColumns,
+	type WorkbenchLayout,
+} from "./layout";
 import { nearestTurn, renderRail } from "./rail";
 import { type CellPoint, highlightRow, LINE_END, MouseSelection, rowSpan, selectedText } from "./selection";
+import { SessionSidebar, type SidebarDeps } from "./sidebar";
 import { currentTurn, isUserTurnBlock, jumpOffset, promptLabel, type TurnEntry, turnTarget } from "./turn-index";
 
 /** The parts of InteractiveMode the shell reads; InteractiveMode satisfies it structurally. */
@@ -52,6 +63,8 @@ export interface WorkbenchShellOptions {
 	notify?(message: string): void;
 	/** Put text on the clipboard; without it a selection only highlights. */
 	copyToClipboard?(text: string): Promise<void>;
+	/** Sessions for the sidebar; without them there is no sidebar (startup prepaint). */
+	sidebar?: SidebarDeps;
 }
 
 const WHEEL_STEP = 3;
@@ -61,6 +74,8 @@ const AUTO_SCROLL_MS = 50;
 const ANIMATION_TICK_MS = 80;
 /** How often a shell hidden behind an inline popup checks whether it may come back. */
 const SUSPEND_POLL_MS = 150;
+/** Picks up sessions other processes created or renamed while the sidebar shows. */
+const SIDEBAR_REFRESH_MS = 30_000;
 const CONSUMED = { consume: true } as const;
 
 /** Where the viewport sat relative to a prompt, to restore after a reflow. */
@@ -120,6 +135,14 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	#notice: string | undefined;
 	/** The last frame showed "rows below" on the last content row; a click there scrolls to the bottom. */
 	#tailHintShown = false;
+	#sidebar: SessionSidebar | undefined;
+	/** Set by the sidebar key; undefined follows the terminal width ({@link SIDEBAR_AUTO_COLUMNS}). */
+	#sidebarShown: boolean | undefined;
+	/** Keys the sidebar handles go to it before the editor. */
+	#sidebarFocused = false;
+	#sidebarRefresh: NodeJS.Timeout | undefined;
+	/** The list may be out of date; the next frame that draws the sidebar reloads it. */
+	#sidebarStale = true;
 
 	constructor(host: WorkbenchHost, options: WorkbenchShellOptions = {}) {
 		this.#host = host;
@@ -138,6 +161,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 				return !shell.#host.ui.inputDeferred;
 			},
 		};
+		this.#setSidebar(options.sidebar);
 	}
 
 	/**
@@ -150,6 +174,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		this.#options = options;
 		this.#hostedFocus = undefined;
 		this.#hostedSlot = [];
+		this.#setSidebar(options.sidebar);
 		host.ui.requestRender();
 	}
 
@@ -188,6 +213,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		// showOverlay focused the shell itself; hand the keys straight back.
 		const target = previous && this.ownsOverlayFocusTarget(previous) ? previous : this.#defaultFocusTarget();
 		if (target) ui.setFocus(target);
+		this.#startSidebarRefresh();
 		return true;
 	}
 
@@ -196,6 +222,8 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		if (!handle) return;
 		this.#handle = undefined;
 		this.#stopSuspendPoll();
+		this.#stopSidebarRefresh();
+		this.#sidebarFocused = false;
 		const ui = this.#host.ui;
 		const focused = ui.getFocused();
 		handle.hide();
@@ -222,6 +250,12 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	toggle(): void {
 		if (this.#handle) this.close();
 		else this.open();
+	}
+
+	/** The session list may have changed (a turn ended and may have titled its session). */
+	refreshSessions(): void {
+		this.#sidebarStale = true;
+		this.#host.ui.requestRender();
 	}
 
 	// --- Focus delegation -----------------------------------------------------
@@ -317,6 +351,11 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 			this.#jump(1);
 			return CONSUMED;
 		}
+		if (this.#sidebar && keybindings.matches(data, "fork.workbench.sidebar")) {
+			this.#toggleSidebarFocus();
+			return CONSUMED;
+		}
+		if (this.#sidebarFocused && this.#sidebar?.handleKey(data)) return CONSUMED;
 		return undefined;
 	}
 
@@ -349,7 +388,16 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		this.#setHoverRow(region === "rail" ? event.row : undefined);
 		if (region === "outside") return false;
 		if (event.leftClick) this.#dismissSelection();
-		if (event.wheel !== null) {
+		// A click anywhere else hands the keys back to the editor.
+		if (event.leftClick && region !== "sidebar" && this.#sidebarFocused) {
+			this.#sidebarFocused = false;
+			this.#host.ui.requestRender();
+		}
+		if (region === "sidebar") {
+			if (event.wheel !== null) this.#sidebar?.scroll(event.wheel);
+			else if (event.leftClick) this.#sidebar?.click(event.row);
+			return true;
+		} else if (event.wheel !== null) {
 			this.#scroll.scroll(event.wheel * WHEEL_STEP);
 		} else if (event.leftClick && region === "content" && this.#tailHintShown && event.row === layout.bottomTop - 1) {
 			this.#scroll.scrollToBottom();
@@ -523,7 +571,9 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		const roots = ui.children;
 		const chat = this.#mountedTranscript(roots);
 		const chatIndex = chat ? roots.indexOf(chat) : -1;
-		const main = mainColumn(width);
+		const sidebar = this.#sidebarWidth(width);
+		if (sidebar === 0) this.#sidebarFocused = false;
+		const main = mainColumn(width, sidebar);
 		const contentWidth = contentColumn(main).width;
 
 		// Before a transcript mounts (startup prepaint), the editor and what follows it stay pinned.
@@ -532,7 +582,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		const bottom: string[] = [];
 		for (const root of bottomRoots) bottom.push(...root.render(main.width));
 		const bottomLines = clampBottomRows(bottom, ui.terminal.rows);
-		const layout = computeLayout(width, ui.terminal.rows, bottomLines.length);
+		const layout = computeLayout(width, ui.terminal.rows, bottomLines.length, sidebar);
 		this.#layout = layout;
 
 		const headRoots = roots.slice(0, chat ? chatIndex : pinFrom);
@@ -555,7 +605,21 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 
 		const lines = this.#renderViewport(layout);
 		lines.push(...bottomLines);
-		return lines;
+		return this.#withSidebar(layout, lines);
+	}
+
+	/** The main column's rows behind the sidebar and its separator. */
+	#withSidebar(layout: WorkbenchLayout, lines: string[]): string[] {
+		const span = layout.sidebar;
+		if (!span || !this.#sidebar) return lines;
+		// Loaded only while drawn: a collapsed sidebar never lists sessions.
+		if (this.#sidebarStale) {
+			this.#sidebarStale = false;
+			void this.#sidebar.refresh();
+		}
+		const separator = theme.fg("dim", " │ ");
+		const left = this.#sidebar.render(span.width, layout.rows, this.#sidebarFocused);
+		return left.map((row, y) => `${row}${padding(span.width - visibleWidth(row))}${separator}${lines[y] ?? ""}`);
 	}
 
 	/** Content rows, the status hint over the last one, and the rail beside them. */
@@ -732,6 +796,72 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 				});
 			}
 		});
+	}
+
+	// --- Sidebar -------------------------------------------------------------------
+
+	#setSidebar(deps: SidebarDeps | undefined): void {
+		this.#stopSidebarRefresh();
+		this.#sidebarFocused = false;
+		this.#sidebar = deps
+			? new SessionSidebar(deps, {
+					requestRender: () => this.#host.ui.requestRender(),
+					onSessionChanged: () => {
+						// The new transcript starts at its latest answer.
+						this.#sidebarFocused = false;
+						this.#pinToTail = true;
+						this.#host.ui.requestRender();
+					},
+					onExit: () => {
+						this.#sidebarFocused = false;
+						this.#host.ui.requestRender();
+					},
+				})
+			: undefined;
+		if (this.#handle) this.#startSidebarRefresh();
+	}
+
+	/** Sidebar columns this frame: the user's choice, else shown on wide terminals. */
+	#sidebarWidth(columns: number): number {
+		if (!this.#sidebar) return 0;
+		const shown = this.#sidebarShown ?? columns >= SIDEBAR_AUTO_COLUMNS;
+		return shown ? sidebarColumns(columns) : 0;
+	}
+
+	/**
+	 * Focus the sidebar, showing it if collapsed; pressed while focused, collapse it.
+	 * Only a real show or collapse overrides the width rule, so focusing an
+	 * auto-shown sidebar still lets a narrower terminal collapse it.
+	 */
+	#toggleSidebarFocus(): void {
+		if (this.#sidebarFocused) {
+			this.#sidebarShown = false;
+			this.#sidebarFocused = false;
+		} else {
+			if (this.#sidebarWidth(this.#host.ui.terminal.columns) === 0) {
+				this.#sidebarShown = true;
+				// Collapsed, it skipped the periodic reloads.
+				this.#sidebarStale = true;
+			}
+			this.#sidebarFocused = true;
+			this.#sidebar?.reveal();
+		}
+		this.#host.ui.requestRender();
+	}
+
+	#startSidebarRefresh(): void {
+		if (!this.#sidebar || this.#sidebarRefresh) return;
+		this.#sidebarStale = true;
+		this.#sidebarRefresh = setInterval(() => {
+			if (this.#layout?.sidebar) this.refreshSessions();
+		}, SIDEBAR_REFRESH_MS);
+		this.#sidebarRefresh.unref?.();
+	}
+
+	#stopSidebarRefresh(): void {
+		if (!this.#sidebarRefresh) return;
+		clearInterval(this.#sidebarRefresh);
+		this.#sidebarRefresh = undefined;
 	}
 
 	// --- Inline popups ------------------------------------------------------------

@@ -17,7 +17,8 @@
 - **M2 轮次跳转**：右侧导航条，`ctrl+up` / `ctrl+down` 跳到上一个或下一个提问；内容区下方有未读行时显示"下方还有 N 行 点击回到底部"。
 - **M3 鼠标选择与复制**：拖选文字，松开后复制到剪贴板。
 - **M3 之后**：默认打开、移除阅读模式、启动预绘制时就进入全屏，鼠标上报在切到 raw 输入时打开。
-- **未做**：M4 会话侧边栏；M5 设置项、`/hotkeys` 说明、CHANGELOG。
+- **M4 会话侧边栏**：左侧列出当前项目的会话，单击或回车切换，`/` 过滤，`n` 新建；当前回合运行中切换要二次确认。窄于 100 列时自动收起，`f2` 聚焦、收起或展开。
+- **未做**：M5 设置项、`/hotkeys` 说明、CHANGELOG。
 
 ### 1.2 自动更新指向 fork 的构建
 
@@ -27,8 +28,8 @@
 
 fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 
-- [packages/tui/src/fork/](../../packages/tui/src/fork/)：快捷键表、外壳及其纯函数模块（布局、轮次索引、导航条、选区）
-- [packages/coding-agent/src/fork/](../../packages/coding-agent/src/fork/)：`installWorkbench`（装配到 InteractiveMode）、`workbench-startup.ts`（预绘制时打开、安装时交接）
+- [packages/tui/src/fork/](../../packages/tui/src/fork/)：快捷键表、外壳及其纯函数模块（布局、轮次索引、导航条、选区）、会话侧边栏
+- [packages/coding-agent/src/fork/](../../packages/coding-agent/src/fork/)：`installWorkbench`（装配到 InteractiveMode，提供会话列表与切换）、`workbench-startup.ts`（预绘制时打开、安装时交接）
 - 测试：`packages/tui/test/fork-workbench-*.test.ts`、`packages/coding-agent/test/fork-workbench.test.ts`
 
 ## 3. 上游触点
@@ -56,6 +57,7 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 - **输入路由**：外壳的输入监听器排在上游监听器之前；上游的 `ctrl+o`、`ctrl+t` 等在有覆盖层时让出按键，由外壳代为执行。上游改变这种让出行为，这些按键可能失效或被执行两次。
 - **对话组件**：`TranscriptContainer` 的 `beginFrame` / `getChildStartRow`、`UserMessageComponent`（轮次识别）、`stripPromptZones`。
 - **启动预绘制**：`beginStartupComposer` 的 `deferInput` 启动、`enableInput()` 的调用时机、`ComposerLease.adopt()`。
+- **会话侧边栏**：`SessionManager.listForPicker`、`sessionDisplayName`、`rankSessionSearchMatches`，以及 InteractiveMode 的 `handleResumeSession`、`handleNewCommand`、`session.isStreaming`。签名变化 `bun run check` 能发现；行为变化（例如切换时不再中止当前回合）发现不了。
 
 ## 5. 与上游的行为差异
 
@@ -75,5 +77,6 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 4. 手动启动 omp，确认：
    - 第一帧就是全屏，能看到对话内容（触点 ① 没有测试守护）；
    - 滚轮能滚动，`ctrl+n` 能切换；
+   - 宽终端左侧有会话列表，单击能切换会话；
    - 退出后终端恢复正常。
 5. 第 4 节的依赖如有变化，对照 [workbench-plan.md §11](workbench-plan.md) 修复。

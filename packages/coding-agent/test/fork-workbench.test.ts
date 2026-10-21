@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
 import { type Component, Container, getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
@@ -6,6 +6,8 @@ import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-containe
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { installWorkbench, type WorkbenchMode } from "../src/fork/workbench";
+import type { SessionInfo } from "../src/session/session-listing";
+import { SessionManager } from "../src/session/session-manager";
 import {
 	beginStartupComposer,
 	stopPendingStartupComposer,
@@ -45,6 +47,7 @@ afterEach(() => {
 	for (const cleanup of cleanups.splice(0)) cleanup();
 	if (previousKeybindings) setKeybindings(previousKeybindings);
 	previousKeybindings = undefined;
+	vi.restoreAllMocks();
 });
 
 function useAppKeybindings(): void {
@@ -59,24 +62,46 @@ function mountMode(composer: Composer, editor: Component) {
 	editorContainer.addChild(editor);
 	composer.setRuntimeChildren([chatContainer, editorContainer], { transientChrome: [editorContainer] });
 	const calls: string[] = [];
+	const nameListeners: (() => void)[] = [];
 	const mode: WorkbenchMode = {
 		ui: composer.ui,
 		chatContainer,
 		editorContainer,
 		editor,
 		showWarning: message => calls.push(`warning: ${message}`),
+		showError: message => calls.push(`error: ${message}`),
 		toggleThinkingBlockVisibility: () => calls.push("thinking"),
 		showHistorySearch: () => calls.push("history"),
 		openExternalEditor: () => calls.push("external"),
 		resetDisplayAfterAppearanceRefresh: () => calls.push("reset"),
 		toggleToolOutputExpansion: () => calls.push("expand"),
+		// Below the sidebar's auto width (100 columns) the session list is never loaded.
+		session: { isStreaming: false, subscribe: () => () => {} },
+		sessionManager: {
+			getCwd: () => "/project",
+			getSessionDir: () => "/sessions",
+			getSessionFile: () => "/sessions/current.jsonl",
+			onSessionNameChanged: listener => {
+				nameListeners.push(listener);
+				return () => {};
+			},
+		},
+		handleResumeSession: async path => {
+			calls.push(`resume: ${path}`);
+		},
+		handleNewCommand: async () => {
+			calls.push("new");
+		},
 	};
-	return { mode, chatContainer, calls };
+	const renameSession = () => {
+		for (const listener of nameListeners) listener();
+	};
+	return { mode, chatContainer, calls, renameSession };
 }
 
-function harness() {
+function harness(columns = 60, configure?: (mode: WorkbenchMode) => void) {
 	useAppKeybindings();
-	const terminal = new VirtualTerminal(60, 12);
+	const terminal = new VirtualTerminal(columns, 12);
 	const scheduler = new VirtualRenderScheduler();
 	const composer = new Composer({
 		terminal,
@@ -85,16 +110,39 @@ function harness() {
 	});
 	cleanups.push(() => composer.stop());
 	const editor = new Editor();
-	const { mode, calls } = mountMode(composer, editor);
+	const { mode, calls, renameSession } = mountMode(composer, editor);
+	configure?.(mode);
 	composer.start({ playWelcomeIntro: false });
 	composer.ui.setFocus(editor);
 	const shell = installWorkbench(mode);
 	cleanups.push(() => shell.close());
-	const press = async (data: string) => {
-		terminal.sendInput(data);
+	const settle = async () => {
+		// Let a session list load resolve, then paint what it requested.
+		await scheduler.settle(terminal);
+		await Bun.sleep(0);
 		await scheduler.settle(terminal);
 	};
-	return { composer, editor, shell, calls, press };
+	const press = async (data: string) => {
+		terminal.sendInput(data);
+		await settle();
+	};
+	return { terminal, composer, editor, shell, calls, press, settle, renameSession };
+}
+
+function sessionInfo(name: string, minutesAgo: number): SessionInfo {
+	const modified = new Date(Date.now() - minutesAgo * 60_000);
+	return {
+		path: `/sessions/${name}.jsonl`,
+		id: name,
+		cwd: "/project",
+		title: name,
+		created: modified,
+		modified,
+		messageCount: 2,
+		size: 1,
+		firstMessage: name,
+		allMessagesText: name,
+	};
 }
 
 function rowOf(terminal: VirtualTerminal, text: string): number {
@@ -189,5 +237,31 @@ describe("workbench at startup", () => {
 		terminal.sendInput(CTRL_N);
 		await terminal.waitForRender();
 		expect(lease.composer.ui.hasOverlay()).toBe(false);
+	});
+});
+
+describe("workbench session sidebar", () => {
+	it("lists the project's sessions, reloads them on a rename and shows a failed switch", async () => {
+		const listed = spyOn(SessionManager, "listForPicker").mockResolvedValue([
+			sessionInfo("current", 1),
+			sessionInfo("broken", 2),
+		]);
+		const h = harness(120, mode => {
+			mode.handleResumeSession = async () => {
+				throw new Error("session file is corrupt");
+			};
+		});
+		await h.settle();
+		expect(listed).toHaveBeenCalledWith("/project", "/sessions");
+		const row = rowOf(h.terminal, "broken");
+		expect(row).toBeGreaterThan(0);
+
+		h.renameSession();
+		await h.settle();
+		expect(listed).toHaveBeenCalledTimes(2);
+
+		await h.press(`\x1b[<0;3;${row + 1}M`);
+		await h.press(`\x1b[<0;3;${row + 1}m`);
+		expect(h.calls).toEqual(["error: session file is corrupt"]);
 	});
 });

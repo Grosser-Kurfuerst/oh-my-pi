@@ -3,18 +3,31 @@
  * lives in pi-tui and depends on nothing here; this module hands it the
  * interactive mode and the app-level services it needs.
  */
+import * as path from "node:path";
 import { type Component, getKeybindings, isNativeRendering } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "@oh-my-pi/pi-tui/app-keybindings";
 import { type WorkbenchHost, WorkbenchShell } from "@oh-my-pi/pi-tui/fork/workbench/shell";
+import type { SidebarDeps } from "@oh-my-pi/pi-tui/fork/workbench/sidebar";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
+import type { AgentSession } from "../session/agent-session";
+import { sessionDisplayName } from "../session/session-listing";
+import { SessionManager } from "../session/session-manager";
 import { copyToClipboard } from "../utils/clipboard";
 import { takeStartupWorkbench } from "./workbench-startup";
 
 /** The InteractiveMode surface the workbench needs. */
 export interface WorkbenchMode extends WorkbenchHost {
 	readonly editor: Component;
+	readonly session: Pick<AgentSession, "isStreaming" | "subscribe">;
+	readonly sessionManager: Pick<
+		SessionManager,
+		"getCwd" | "getSessionDir" | "getSessionFile" | "onSessionNameChanged"
+	>;
+	handleResumeSession(sessionPath: string): Promise<void>;
+	handleNewCommand(): Promise<void>;
 	showWarning(message: string): void;
+	showError(message: string): void;
 	toggleThinkingBlockVisibility(): void;
 	showHistorySearch(): void;
 	openExternalEditor(): void;
@@ -42,9 +55,39 @@ function expandFocusedDialog(focused: Component | null): boolean {
 	return false;
 }
 
+/** Show a failed switch like upstream's session selector does, then let the sidebar see it fail too. */
+async function reportingErrors(mode: WorkbenchMode, action: () => Promise<void>): Promise<void> {
+	try {
+		await action();
+	} catch (error) {
+		mode.showError(error instanceof Error ? error.message : String(error));
+		throw error;
+	}
+}
+
+/** The sidebar's view of this project's sessions; read live, so `/move` and worktree moves follow. */
+function sidebarDeps(mode: WorkbenchMode): SidebarDeps {
+	return {
+		async listSessions() {
+			const manager = mode.sessionManager;
+			const sessions = await SessionManager.listForPicker(manager.getCwd(), manager.getSessionDir());
+			return sessions.map(info => ({ ...info, displayName: sessionDisplayName(info) }));
+		},
+		projectName: () => path.basename(mode.sessionManager.getCwd()),
+		currentPath: () => mode.sessionManager.getSessionFile(),
+		isStreaming: () => mode.session.isStreaming,
+		switchTo: sessionPath => reportingErrors(mode, () => mode.handleResumeSession(sessionPath)),
+		newSession: () => reportingErrors(mode, () => mode.handleNewCommand()),
+	};
+}
+
 /** The shell the startup prepaint opened, now hosted by `mode`; a new one when startup opened none. */
 function takeOverShell(mode: WorkbenchMode): WorkbenchShell {
-	const options = { notify: (message: string) => mode.showWarning(message), copyToClipboard };
+	const options = {
+		notify: (message: string) => mode.showWarning(message),
+		copyToClipboard,
+		sidebar: sidebarDeps(mode),
+	};
 	const startup = takeStartupWorkbench(mode.ui);
 	if (startup) {
 		startup.rebind(mode, options);
@@ -60,6 +103,11 @@ export function installWorkbench(mode: WorkbenchMode): WorkbenchShell {
 	const shell = takeOverShell(mode);
 	// Native rendering cannot host the shell; stay inline there without the warning open() would show.
 	if (!isNativeRendering()) shell.open();
+	// A finished turn may have titled its session; titles generated after it, and /rename, report here.
+	mode.session.subscribe(event => {
+		if (event.type === "agent_end") shell.refreshSessions();
+	});
+	mode.sessionManager.onSessionNameChanged(() => shell.refreshSessions());
 	// Registered after upstream's listeners, so it only sees keys they passed on.
 	mode.ui.addInputListener(data => {
 		if (!shell.isFrontmost) return undefined;

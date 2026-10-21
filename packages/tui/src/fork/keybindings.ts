@@ -9,6 +9,7 @@ interface ForkKeybindings {
 	"fork.workbench.toggle": true;
 	"fork.workbench.prevTurn": true;
 	"fork.workbench.nextTurn": true;
+	"fork.workbench.sidebar": true;
 }
 
 declare module "../keybindings" {
@@ -27,5 +28,9 @@ export const FORK_KEYBINDINGS = {
 	"fork.workbench.nextTurn": {
 		defaultKeys: "ctrl+down",
 		description: "Workbench: jump to the next prompt",
+	},
+	"fork.workbench.sidebar": {
+		defaultKeys: "f2",
+		description: "Workbench: focus the session list; again to collapse or expand it",
 	},
 } as const satisfies KeybindingDefinitions;
