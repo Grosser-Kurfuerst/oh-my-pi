@@ -8,6 +8,7 @@ import {
 	takeStartupComposerLease,
 } from "@oh-my-pi/pi-coding-agent/modes/startup-composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { takeStartupWorkbench } from "../src/fork/workbench-startup";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { assistantMsg, createTestSession, userMsg } from "./utilities";
 
@@ -122,6 +123,12 @@ describe("issue #9597 — cold-launch welcome duplication", () => {
 					!resuming ||
 					terminal.getScrollBuffer().some(line => Bun.stripANSI(line).includes("resume marker answer")),
 			);
+			// Fork: the prepaint opened the workbench, which holds native history back
+			// until it closes; close it so the clear lands in the normal buffer.
+			const startupShell = takeStartupWorkbench(mode.ui);
+			expect(startupShell).toBeDefined();
+			startupShell!.close();
+			await terminal.waitForRender();
 			const rows = terminal.getScrollBuffer().map(l => Bun.stripANSI(l));
 			return {
 				resets: terminal.countResets(),

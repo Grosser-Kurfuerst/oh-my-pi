@@ -25,7 +25,6 @@ import { isNativeRendering, onNativeRenderingChange } from "../../native/state";
 import { theme } from "../../theme";
 import {
 	type Component,
-	type Container,
 	CURSOR_MARKER,
 	type Focusable,
 	type OverlayFocusOwner,
@@ -42,8 +41,10 @@ import { currentTurn, isUserTurnBlock, jumpOffset, promptLabel, type TurnEntry, 
 /** The parts of InteractiveMode the shell reads; InteractiveMode satisfies it structurally. */
 export interface WorkbenchHost {
 	readonly ui: TUI;
-	readonly chatContainer: TranscriptContainer;
-	readonly editorContainer: Container;
+	/** Absent at startup prepaint, before InteractiveMode exists. */
+	readonly chatContainer?: TranscriptContainer;
+	/** Holds the editor, or the inline selector standing in for it. */
+	readonly editorContainer: { readonly children: readonly Component[] };
 }
 
 export interface WorkbenchShellOptions {
@@ -51,15 +52,12 @@ export interface WorkbenchShellOptions {
 	notify?(message: string): void;
 	/** Put text on the clipboard; without it a selection only highlights. */
 	copyToClipboard?(text: string): Promise<void>;
+	/**
+	 * `false` keeps terminal mouse reporting off, e.g. at startup prepaint, where
+	 * the tty is still in cooked mode and would echo every report onto the frame.
+	 */
+	mouseTracking?: boolean;
 }
-
-const SHELL_OVERLAY: OverlayOptions = {
-	anchor: "top-left",
-	width: "100%",
-	maxHeight: "100%",
-	margin: 0,
-	fullscreen: true,
-};
 
 const WHEEL_STEP = 3;
 /** Auto-scroll cadence while a drag holds the pointer on the top or bottom content row. */
@@ -85,9 +83,11 @@ interface RenderedPart {
 type OverlayEntry = TUI["overlayStack"][number];
 
 export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
-	readonly #host: WorkbenchHost;
-	readonly #options: WorkbenchShellOptions;
+	#host: WorkbenchHost;
+	#options: WorkbenchShellOptions;
 	readonly #scroll = new ScrollView([], { height: 0, scrollbar: "never", followTail: true });
+	/** Read by the TUI on every frame, so a rebind can turn mouse reporting on. */
+	readonly #overlayOptions: OverlayOptions;
 	#handle: OverlayHandle | undefined;
 	#focused = false;
 	#suspendPoll: NodeJS.Timeout | undefined;
@@ -129,6 +129,30 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	constructor(host: WorkbenchHost, options: WorkbenchShellOptions = {}) {
 		this.#host = host;
 		this.#options = options;
+		const shell = this;
+		this.#overlayOptions = {
+			anchor: "top-left",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+			fullscreen: true,
+			get mouseTracking() {
+				return shell.#options.mouseTracking !== false;
+			},
+		};
+	}
+
+	/**
+	 * Hand the shell to a new host on the same TUI, open or not: the startup
+	 * prepaint opens it before InteractiveMode exists, which takes it over here.
+	 */
+	rebind(host: WorkbenchHost, options: WorkbenchShellOptions = {}): void {
+		if (host.ui !== this.#host.ui) throw new Error("WorkbenchShell cannot move to another TUI");
+		this.#host = host;
+		this.#options = options;
+		this.#hostedFocus = undefined;
+		this.#hostedSlot = [];
+		host.ui.requestRender();
 	}
 
 	/** Register the shell's input routing; returns a disposer. */
@@ -162,7 +186,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		const ui = this.#host.ui;
 		const previous = ui.getFocused();
 		this.#pinToTail = true;
-		this.#handle = ui.showOverlay(this, SHELL_OVERLAY);
+		this.#handle = ui.showOverlay(this, this.#overlayOptions);
 		// showOverlay focused the shell itself; hand the keys straight back.
 		const target = previous && this.ownsOverlayFocusTarget(previous) ? previous : this.#defaultFocusTarget();
 		if (target) ui.setFocus(target);
@@ -504,15 +528,16 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		const main = mainColumn(width);
 		const contentWidth = contentColumn(main).width;
 
-		const bottomRoots = chatIndex === -1 ? [] : roots.slice(chatIndex + 1);
+		// Before a transcript mounts (startup prepaint), the editor and what follows it stay pinned.
+		const pinFrom = chat ? chatIndex + 1 : this.#editorRootIndex(roots);
+		const bottomRoots = roots.slice(pinFrom);
 		const bottom: string[] = [];
 		for (const root of bottomRoots) bottom.push(...root.render(main.width));
 		const bottomLines = clampBottomRows(bottom, ui.terminal.rows);
 		const layout = computeLayout(width, ui.terminal.rows, bottomLines.length);
 		this.#layout = layout;
 
-		// No transcript mounted (never after init): everything scrolls, nothing is pinned.
-		const headRoots = chatIndex === -1 ? roots : roots.slice(0, chatIndex);
+		const headRoots = roots.slice(0, chat ? chatIndex : pinFrom);
 		// Logical rows move when the width reflows them; a selection over them would point at other text.
 		if (contentWidth !== this.#contentWidth) this.#resetSelection();
 		const anchor = this.#takeReflowAnchor(contentWidth);
@@ -679,11 +704,18 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	 */
 	#mountedTranscript(roots: readonly Component[]): TranscriptContainer | undefined {
 		const host = this.#host.chatContainer;
-		if (roots.includes(host)) this.#transcript = host;
+		if (host && roots.includes(host)) this.#transcript = host;
 		else if (!this.#transcript || !roots.includes(this.#transcript)) {
 			this.#transcript = roots.find(root => root instanceof TranscriptContainer);
 		}
 		return this.#transcript;
+	}
+
+	/** Index of the editor when it is itself a root (prepaint); past the end otherwise, so nothing is pinned. */
+	#editorRootIndex(roots: readonly Component[]): number {
+		const editor = this.#defaultFocusTarget();
+		const index = editor ? roots.indexOf(editor) : -1;
+		return index === -1 ? roots.length : index;
 	}
 
 	/** Committed blocks rendered for the shell would otherwise keep their row caches for the session. */

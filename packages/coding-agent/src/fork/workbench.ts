@@ -9,6 +9,7 @@ import { type WorkbenchHost, WorkbenchShell } from "@oh-my-pi/pi-tui/fork/workbe
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { copyToClipboard } from "../utils/clipboard";
+import { takeStartupWorkbench } from "./workbench-startup";
 
 /** The InteractiveMode surface the workbench needs. */
 export interface WorkbenchMode extends WorkbenchHost {
@@ -41,13 +42,22 @@ function expandFocusedDialog(focused: Component | null): boolean {
 	return false;
 }
 
+/** The shell the startup prepaint opened, now hosted by `mode`; a new one when startup opened none. */
+function takeOverShell(mode: WorkbenchMode): WorkbenchShell {
+	const options = { notify: (message: string) => mode.showWarning(message), copyToClipboard };
+	const startup = takeStartupWorkbench(mode.ui);
+	if (startup) {
+		startup.rebind(mode, options);
+		return startup;
+	}
+	const shell = new WorkbenchShell(mode, options);
+	shell.install();
+	return shell;
+}
+
 /** Install the workbench on a fully initialized interactive mode and open it; the toggle still hides it. */
 export function installWorkbench(mode: WorkbenchMode): WorkbenchShell {
-	const shell = new WorkbenchShell(mode, {
-		notify: message => mode.showWarning(message),
-		copyToClipboard,
-	});
-	shell.install();
+	const shell = takeOverShell(mode);
 	// Native rendering cannot host the shell; stay inline there without the warning open() would show.
 	if (!isNativeRendering()) shell.open();
 	// Registered after upstream's listeners, so it only sees keys they passed on.

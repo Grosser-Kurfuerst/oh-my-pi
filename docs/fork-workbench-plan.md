@@ -91,17 +91,21 @@ packages/tui/src/fork/
 
 packages/coding-agent/src/fork/
 ├── workbench.ts              # installWorkbench(mode)：组装 deps、会话列表、切换、读取设置
+├── workbench-startup.ts      # openStartupWorkbench / takeStartupWorkbench：预绘制时打开外壳，安装时交接
 └── workbench-settings.ts     # register() 定义 fork.workbench.* 设置
 ```
 
-### 4.2 上游触点（共 4 处，其中 2 处可选）
+### 4.2 上游触点（共 5 处，其中 2 处可选）
 
 | # | 文件（近 30 天上游提交数） | 改动 | 必需 | 引入阶段 |
 |---|---|---|---|---|
-| ① | [main.ts:701](../packages/coding-agent/src/main.ts:701)（73） | 在 setup wizard 的 `if` 块之后加 `installWorkbench(mode);`，另加 1 行 import | ✅ | M1 |
+| ① | [main.ts:703](../packages/coding-agent/src/main.ts:703)（73） | 在 setup wizard 的 `if` 块之后加 `installWorkbench(mode);`，另加 1 行 import | ✅ | M1 |
 | ② | [app-keybindings.ts:89](../packages/tui/src/app-keybindings.ts:89)（8） | 在 `...TUI_KEYBINDINGS,` 之后加 `...FORK_KEYBINDINGS,`，另加 1 行 import | ✅ | M1 |
 | ③ | [all-settings.ts](../packages/coding-agent/src/config/all-settings.ts)（6） | 1 行 import，`DOMAINS` 加 1 项 | 可选 | M5 |
 | ④ | [tui.ts:3847](../packages/tui/src/tui.ts:3847)（68） | `wantAlt` 改为"栈中任一可见覆盖层是 fullscreen" | 可选 | M1 视验证结果决定 |
+| ⑤ | [startup-composer.ts:89](../packages/coding-agent/src/modes/startup-composer.ts:89)（5） | 在 `beginStartupComposer` 的 `composer.start(...)` 之前加 `openStartupWorkbench(composer);`，另加 1 行 import | ✅ | M3 之后 |
+
+触点 ⑤ 还连带改了 1 个上游测试：[issue-9597-cold-launch-double-clear.test.ts](../packages/coding-agent/test/issue-9597-cold-launch-double-clear.test.ts) 走真实预绘制路径，外壳打开期间启动清屏被延后，所以统计前先关闭启动外壳（带 `Fork:` 注释）。触点 ⑤ 本身由 [fork-workbench.test.ts](../packages/coding-agent/test/fork-workbench.test.ts) 的启动用例守护：这一行在 rebase 中丢失，或被挪到 `start` 之后，测试都会失败。
 
 **为什么挂在 `main.ts`，不挂在 `interactive-mode.ts`**：
 
@@ -119,8 +123,8 @@ packages/coding-agent/src/fork/
 ```ts
 export interface WorkbenchHost {          // InteractiveMode 在结构上已满足，不需要 adapter
 	readonly ui: TUI;
-	readonly chatContainer: TranscriptContainer;
-	readonly editorContainer: Container;
+	readonly chatContainer?: TranscriptContainer;                       // 预绘制时还没有
+	readonly editorContainer: { readonly children: readonly Component[] };
 }
 
 export class WorkbenchShell implements Component, OverlayFocusOwner {
@@ -137,7 +141,7 @@ export class WorkbenchShell implements Component, OverlayFocusOwner {
    - 当 `cols < minColumns`（默认 100）时自动收起侧边栏。
    - 导航条占 1 列，和主列之间空 1 列。
 2. **驱动动画**：调用 `chatContainer.beginFrame({ now, tick: Math.floor(now / 80) })`（[transcript-container.ts:459](../packages/tui/src/chrome/transcript-container.ts:459)），节拍与 composer 一致。外壳显示期间 composer 不运行，必须由外壳代劳，否则 spinner 会停住。
-3. **拆分根组件**：在 `ui.children` 中找到 `chatContainer` 的下标 `k`。`[0..k]` 进入内容区，`(k..end]` 进入底部固定区。
+3. **拆分根组件**：在 `ui.children` 中找到 `chatContainer` 的下标 `k`。`[0..k]` 进入内容区，`(k..end]` 进入底部固定区。预绘制时还没有 transcript，就从编辑器所在的根开始固定到底部，它上面的欢迎页进入内容区。
 4. **底部固定区**：依次 `render(W_main)` 并拼接。
    - 高度上限为 `rows - 4`，保证内容区至少有 4 行。超出上限时保留尾部，因为光标和选择器高亮通常在下方。
    - 保留其中的 `CURSOR_MARKER`。只要当前焦点组件是 overlay focus target，[tui.ts:4461](../packages/tui/src/tui.ts:4461) 就会把硬件光标放在这里，输入法（IME）才能正常工作。
@@ -175,6 +179,8 @@ ownsOverlayFocusTarget(c) {
 4. **其他输入**：不处理，交给焦点组件（编辑器）。
 
 外壳隐藏时，监听器只识别 `toggle` 和 `prevTurn` 两个键（用来唤起外壳），其余全部放行。
+
+**监听器顺序**：外壳在预绘制时就注册了监听器，所以排在 InteractiveMode 初始化时注册的上游监听器之前。上游监听器在有覆盖层时都会让路，目前没有观察到差异；`installWorkbench` 另注册的转发监听器仍排在上游之后。
 
 ### 5.3 滚动
 
@@ -283,7 +289,7 @@ export interface SidebarSession { path: string; title: string; modified: Date; s
 | 设置 | 默认 | 说明 |
 |---|---|---|
 | `fork.workbench.enabled` | `true` | 总开关；关闭后快捷键也不再拦截 |
-| `fork.workbench.autoOpen` | `true` | 启动后自动进入外壳；`ctrl+n` 仍可隐藏（目前是 `installWorkbench` 里的固定行为，尚无设置项） |
+| `fork.workbench.autoOpen` | `true` | 启动即进入外壳（预绘制时打开，`installWorkbench` 接管）；`ctrl+n` 仍可隐藏（目前是固定行为，尚无设置项） |
 | `fork.workbench.sidebarWidth` | `0` | 0 表示按比例自动计算 |
 | `fork.workbench.minColumns` | `100` | 终端列数低于该值时自动收起侧边栏 |
 
@@ -300,7 +306,8 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen
 | 非全屏覆盖层（center 锚定的 jobs、report 等弹窗） | 现状下 [tui.ts:3847](../packages/tui/src/tui.ts:3847) 只看最顶层覆盖层是不是 fullscreen，于是终端会退回 normal buffer，外壳闪掉，并补提交 history。处理方式见下文"非全屏覆盖层的两种方案"。 |
 | resize | 重新布局，按轮次锚点恢复滚动位置（§5.3）；侧边栏按 `minColumns` 自动收起或展开。 |
 | 流式输出 | 订阅 `session.subscribe`，每个事件都 `requestRender`；流式期间外壳另开一个 80ms 定时器，驱动 spinner 和 `beginFrame`。 |
-| 退出（`ctrl+c`、`/quit`） | `tui.stop()` 会自动退出 alt screen 并补写 history；外壳在 `ui` 停止时清理定时器和输入监听器。 |
+| 启动预绘制 | `beginStartupComposer` 在首帧之前打开外壳，首帧直接进入 alt screen，不再先显示约 1 秒的内联界面。此时外壳的宿主只有 composer 的编辑器，编辑器固定在底部；`installWorkbench` 用 `rebind` 换成 InteractiveMode。预绘制时 tty 仍是 cooked 模式，打开鼠标上报会把报告回显到画面上，所以接管前不开鼠标上报（`mouseTracking: false`），接管后才打开；在这之前滚轮在部分终端会变成方向键。原生渲染模式下不在预绘制时打开。 |
+| 退出（`ctrl+c`、`/quit`） | `tui.stop()` 会自动退出 alt screen 并补写 history；外壳在 `ui` 停止时清理定时器和输入监听器。外壳从启动一直开到退出时，启动时的清屏始终被延后，退出时直接丢弃：终端保留启动前的 scrollback，可见屏被最终画面覆盖。中途关过外壳时，清屏在第一次关闭时执行，和上游一致。 |
 | 原生 TSP 渲染（`isNativeRendering()`） | 禁用外壳：启动时不自动打开，也不提示；手动 `toggle` 时提示"工作台不支持当前的原生渲染模式"。 |
 | 图片（kitty、sixel） | 在内容区滚动时图片可能被截断。第一版接受这个问题；如果影响明显，把图片行替换为 `[image]` 占位。 |
 | 失去的原生能力 | 外壳期间不能用终端原生搜索，也不能点击内联 subagent 聚焦。按 `toggle` 回到原生模式即可。 |
@@ -526,7 +533,8 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen
 
 ### M3 之后的调整（验收反馈）
 
-- **默认打开**：`installWorkbench` 安装后直接打开外壳，`ctrl+n` 仍可隐藏和重新打开。原生渲染模式下不打开，也不弹警告。暂时是固定行为，M5 再决定是否做成 `autoOpen` 设置。是否打开只在安装时判断一次：Tern 乐观启动后又被撤销时不会补开，需要手动 `ctrl+n`；握手晚于安装时会先打开再被关掉，闪一下 alt screen。
+- **默认打开**：启动即打开外壳，`ctrl+n` 仍可隐藏和重新打开。原生渲染模式下不打开，也不弹警告。暂时是固定行为，M5 再决定是否做成 `autoOpen` 设置。是否打开在预绘制和安装时各判断一次：Tern 乐观启动在安装之后才被撤销时不会补开，需要手动 `ctrl+n`。初始化期间按 `ctrl+n` 关掉外壳，安装时会被重新打开（窗口很短，可以接受）。
+- **启动即全屏**（触点 ⑤）：原来外壳在 `createAgentSession` 和 `init` 之后才打开，启动时会先显示约 1 秒的内联界面。现在 `beginStartupComposer` 在首帧之前调用 `openStartupWorkbench`，首帧直接是全屏外壳；`installWorkbench` 通过 `takeStartupWorkbench` 取回这个外壳并 `rebind` 到 InteractiveMode，没有预绘制时（非 TTY 等）照旧新建。打开失败只记日志，启动退回内联。细节见 §7"启动预绘制"和"退出"两行。
 - **移除阅读模式**：删掉 `fork.workbench.read`（`f3`）、`read` 焦点及其按键，包括 `j/k`、`ctrl+d/u`、`space`、`[`、`]`、`g/G` 滚动跳转，以及 `y` 复制当前轮、`c` 打开 `/copy`。替代方式如下：
   - 滚动用滚轮；
   - 跳轮用 `ctrl+up`、`ctrl+down` 或点击导航条；
@@ -565,7 +573,7 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen
 **改动**：
 
 - 新增 `fork/workbench-settings.ts`；决定是否接入触点 ③（不接入时保留常量）。
-- 决定是否把默认打开做成 `autoOpen` 设置（默认打开已在 M3 之后实现）。
+- 决定是否把默认打开做成 `autoOpen` 设置（默认打开已在 M3 之后实现）。预绘制早于 Settings 加载，`autoOpen`、`enabled` 要像 ComposerCache 那样缓存到预绘制阶段可读；否则只能在接管时再关闭，"先全屏再退回"的闪变又会回来。
 - 把工作台快捷键（`ctrl+n`、`ctrl+up`、`ctrl+down`、`f2` 等）的说明加入 `/hotkeys`。
 - 在 `fork/workbench/index.ts` 顶部写上游 API 依赖清单（§11）。
 - 在 `packages/coding-agent/CHANGELOG.md` 的 `[Unreleased]` 下增加 `### Added` 条目。
@@ -573,7 +581,7 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen
 
 **验收**：
 
-- [ ] 设置项生效：关闭 `enabled` 后快捷键不再拦截；关闭 `autoOpen` 后启动停在原生界面，开启时启动即进入外壳（不会盖住 setup wizard）。
+- [ ] 设置项生效：关闭 `enabled` 后快捷键不再拦截；关闭 `autoOpen` 后启动停在原生界面（预绘制时也不打开），开启时启动即进入外壳（不会盖住 setup wizard）。
 - [ ] `/hotkeys` 列出全部工作台快捷键及其说明。
 - [ ] 完整跑一遍 M1～M4 的功能验收清单，没有回退。
 - [ ] 执行 `git diff main --stat`，确认上游文件的改动只有计划中的触点。
@@ -602,7 +610,7 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen
 
 **同步上游的流程**：
 
-1. 合并上游后，冲突只可能出现在触点 ① ②（以及选用的 ③ ④）的几行上，手动保留即可。
+1. 合并上游后，冲突只可能出现在触点 ① ② ⑤（以及选用的 ③ ④）的几行上，手动保留即可。
 2. 运行 `bun check` 和外壳的集成测试，它们能发现上游内部 API 的漂移（见 §11）。
 3. 有 API 变化时，对照 `fork/workbench/index.ts` 顶部的依赖清单逐项修复。
 
@@ -618,6 +626,8 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen
 | `OverlayFocusOwner.ownsOverlayFocusTarget` | [tui.ts:356](../packages/tui/src/tui.ts:356) | 焦点委托 |
 | `ui.addInputListener` | [tui.ts:2443](../packages/tui/src/tui.ts:2443) | 键盘、鼠标拦截 |
 | `ui.children` 中 chatContainer 的位置 | [composer.ts](../packages/tui/src/prompt/composer.ts) `setRuntimeChildren` | 内容区与底部区的拆分 |
+| `beginStartupComposer` / `Composer.ui` / `Composer.editor` | [startup-composer.ts](../packages/coding-agent/src/modes/startup-composer.ts)、[composer.ts](../packages/tui/src/prompt/composer.ts) | 预绘制时打开外壳 |
+| `OverlayOptions.mouseTracking` | [tui.ts](../packages/tui/src/tui.ts) | 接管前关闭鼠标上报 |
 | `TranscriptContainer.beginFrame` / `getChildStartRow` | [transcript-container.ts](../packages/tui/src/chrome/transcript-container.ts) | 动画、轮次定位 |
 | `UserMessageComponent` | [user-message.ts:128](../packages/tui/src/chat/user-message.ts:128) | 轮次识别 |
 | `stripPromptZones` | [transcript-outline.ts:57](../packages/tui/src/chat/transcript-outline.ts:57) | 清理 OSC 133 |

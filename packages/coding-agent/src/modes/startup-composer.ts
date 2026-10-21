@@ -12,6 +12,7 @@ import {
 } from "@oh-my-pi/pi-tui/prompt/composer-cache";
 import { setMagicKeywords } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import { initThemeSync } from "@oh-my-pi/pi-tui/theme";
+import { openStartupWorkbench } from "../fork/workbench-startup";
 import { MAGIC_KEYWORDS } from "./magic-keywords";
 
 /** Inputs available at the CLI prepaint boundary before command modules load. */
@@ -84,6 +85,8 @@ export function beginStartupComposer(options: PrepaintComposerOptions = {}): voi
 		welcome,
 		status: cached.status,
 	});
+	// Fork: open before the first frame so it is already the fullscreen workbench.
+	openStartupWorkbench(composer);
 	try {
 		composer.start({ clearScrollback: true, deferInput: true });
 	} catch (error) {
