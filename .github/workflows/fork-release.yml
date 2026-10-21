@@ -48,7 +48,9 @@ jobs:
           set -euo pipefail
           git remote add upstream "$UPSTREAM_URL"
           git fetch --no-tags upstream '+refs/tags/v*:refs/tags/v*'
-          latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -v -- '-' | head -n1)
+          # awk 读完全部输入再取第一个稳定版；用 head 提前关管道会让 grep 在 runner 上
+          # 报 Broken pipe（runner 忽略 SIGPIPE），配合 pipefail 使整步以 exit 2 失败
+          latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | awk '!/-/ && !found { print; found = 1 }')
           if git merge-base --is-ancestor "$latest" HEAD; then
             echo "custom already contains $latest"
             exit 0
