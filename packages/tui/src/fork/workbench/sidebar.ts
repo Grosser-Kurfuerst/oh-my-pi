@@ -261,7 +261,7 @@ export class SessionSidebar {
 			else if (row === 0) lines.push(theme.fg("dim", this.#emptyText()));
 			else lines.push("");
 		}
-		lines.push(truncateToWidth(this.#footer(now), width));
+		lines.push(truncateToWidth(this.#footer(now, focused), width));
 		return lines.slice(0, height);
 	}
 
@@ -287,11 +287,14 @@ export class SessionSidebar {
 		return this.#query ? "无匹配会话" : "暂无会话";
 	}
 
-	#footer(now: number): string {
+	#footer(now: number, focused: boolean): string {
 		const armed = this.#armed;
 		if (armed && now < armed.until) return theme.fg("warning", "再次确认将中止当前回合");
 		if (this.#query !== undefined) return `${theme.fg("accent", "/")}${this.#query}`;
-		return theme.fg("dim", "/ 过滤  n 新建");
+		if (focused) return theme.fg("dim", "/ 过滤  n 新建");
+		// Unfocused, those keys go to the editor: name the key that focuses the list instead.
+		const [key] = getKeybindings().getKeys("fork.workbench.sidebar");
+		return key ? theme.fg("dim", `${key} 选择`) : "";
 	}
 
 	/** Keep the list window inside the list and, after a key move, around the selection. */

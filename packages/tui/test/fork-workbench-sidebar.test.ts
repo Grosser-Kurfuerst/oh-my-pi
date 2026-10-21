@@ -94,6 +94,7 @@ describe("workbench sidebar", () => {
 	}
 
 	it("lists sessions newest first with their age and marks the current one", async () => {
+		useAppKeybindings();
 		const s = sidebar([session("old", 3 * 24 * 60), session("fresh", 0), session("mid", 125)], "/sessions/mid.jsonl");
 		await s.view.refresh();
 		const rows = plain(s.view.render(30, 7, false));
@@ -103,7 +104,9 @@ describe("workbench sidebar", () => {
 			"● mid                       2h",
 			"  old                       3d",
 		]);
-		expect(rows[6]).toBe("/ 过滤  n 新建");
+		// The list keys only work once focused: until then the hint names the focus key.
+		expect(rows[6]).toBe("f2 选择");
+		expect(plain(s.view.render(30, 7, true))[6]).toBe("/ 过滤  n 新建");
 	});
 
 	it("asks for a second confirm before leaving a running turn, and lets an expired one lapse", async () => {

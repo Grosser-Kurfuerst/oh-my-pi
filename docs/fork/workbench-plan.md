@@ -256,7 +256,7 @@ export interface SidebarSession { path: string; title: string; modified: Date; s
   - 首行是项目名（cwd 的 basename，经 `shortenPath` 处理）和会话数，其下是一条分隔线。
   - 每个会话占一行：`标记 + 标题（截断） + 右对齐的相对时间`。当前会话的标记是 `●`，正在流式输出时换成 spinner；相对时间形如 `3m`、`2h`、`5d`。
   - 侧边栏有焦点时，选中行反色显示。
-  - 底部显示提示 `/ 过滤  n 新建`。
+  - 底部提示：聚焦时显示 `/ 过滤  n 新建`，未聚焦时显示聚焦键（默认 `f2 选择`），因为这些键只在聚焦后生效。
 - **交互**：
   - `↑/↓` 或滚轮移动选中项；回车或单击切换到该会话。
   - `/` 进入过滤，排序复用 `rankSessionSearchMatches`（[session-selector.ts:405](../../packages/tui/src/overlays/session-selector.ts:405)）。
