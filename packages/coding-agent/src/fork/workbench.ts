@@ -10,15 +10,18 @@ import { type WorkbenchHost, WorkbenchShell } from "@oh-my-pi/pi-tui/fork/workbe
 import type { SidebarDeps } from "@oh-my-pi/pi-tui/fork/workbench/sidebar";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
+import type { ScopeLike } from "../config/registry";
 import type { AgentSession } from "../session/agent-session";
 import { sessionDisplayName } from "../session/session-listing";
 import { SessionManager } from "../session/session-manager";
 import { copyToClipboard } from "../utils/clipboard";
-import { takeStartupWorkbench } from "./workbench-startup";
+import { cfgWorkbenchEnabled, cfgWorkbenchStartsOpen } from "./workbench-settings";
+import { discardStartupWorkbench, rememberStartupOpen, takeStartupWorkbench } from "./workbench-startup";
 
 /** The InteractiveMode surface the workbench needs. */
 export interface WorkbenchMode extends WorkbenchHost {
 	readonly editor: Component;
+	readonly settings: ScopeLike;
 	readonly session: Pick<AgentSession, "isStreaming" | "subscribe">;
 	readonly sessionManager: Pick<
 		SessionManager,
@@ -98,11 +101,24 @@ function takeOverShell(mode: WorkbenchMode): WorkbenchShell {
 	return shell;
 }
 
-/** Install the workbench on a fully initialized interactive mode and open it; the toggle still hides it. */
-export function installWorkbench(mode: WorkbenchMode): WorkbenchShell {
+/**
+ * Install the workbench on a fully initialized interactive mode and, with
+ * `autoOpen`, open it; the toggle still hides it. Disabled, nothing is
+ * installed (a shell the prepaint opened from a stale cache is removed).
+ */
+export function installWorkbench(mode: WorkbenchMode): WorkbenchShell | undefined {
+	const autoOpen = cfgWorkbenchStartsOpen.get(mode.settings);
+	rememberStartupOpen(autoOpen);
+	// A change in /settings applies next launch; caching it now keeps that launch's prepaint right.
+	cfgWorkbenchStartsOpen.listen(mode.settings, open => rememberStartupOpen(open));
+	if (!cfgWorkbenchEnabled.get(mode.settings)) {
+		discardStartupWorkbench(mode.ui);
+		return undefined;
+	}
 	const shell = takeOverShell(mode);
 	// Native rendering cannot host the shell; stay inline there without the warning open() would show.
-	if (!isNativeRendering()) shell.open();
+	if (!autoOpen) shell.close();
+	else if (!isNativeRendering()) shell.open();
 	// A finished turn may have titled its session; titles generated after it, and /rename, report here.
 	mode.session.subscribe(event => {
 		if (event.type === "agent_end") shell.refreshSessions();

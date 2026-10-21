@@ -80,6 +80,7 @@ omp 的渲染模型决定了，在普通模式下画不出常驻的侧边栏或�
 ```
 packages/tui/src/fork/
 ├── keybindings.ts            # declare module 合并 Keybindings 接口 + FORK_KEYBINDINGS 表
+├── hotkeys.ts                # /hotkeys 的 Workbench 分组（触点 ⑦）
 └── workbench/
     ├── index.ts              # export * 桶文件；顶部注释列出依赖的上游 API 清单（§11）
     ├── shell.ts              # WorkbenchShell：布局、渲染管线、焦点委托、输入路由
@@ -91,20 +92,21 @@ packages/tui/src/fork/
 
 packages/coding-agent/src/fork/
 ├── workbench.ts              # installWorkbench(mode)：组装 deps、会话列表、切换、读取设置
-├── workbench-startup.ts      # openStartupWorkbench / takeStartupWorkbench：预绘制时打开外壳，安装时交接
+├── workbench-startup.ts      # openStartupWorkbench / takeStartupWorkbench：预绘制时打开外壳，安装时交接；启动缓存 workbench.json
 └── workbench-settings.ts     # register() 定义 fork.workbench.* 设置
 ```
 
-### 4.2 上游触点（共 6 处，其中 2 处可选）
+### 4.2 上游触点（共 7 处，其中 1 处可选未实施）
 
 | # | 文件（近 30 天上游提交数） | 改动 | 必需 | 引入阶段 |
 |---|---|---|---|---|
 | ① | [main.ts:703](../../packages/coding-agent/src/main.ts:703)（73） | 在 setup wizard 的 `if` 块之后加 `installWorkbench(mode);`，另加 1 行 import | ✅ | M1 |
 | ② | [app-keybindings.ts:89](../../packages/tui/src/app-keybindings.ts:89)（8） | 在 `...TUI_KEYBINDINGS,` 之后加 `...FORK_KEYBINDINGS,`，另加 1 行 import | ✅ | M1 |
-| ③ | [all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts)（6） | 1 行 import，`DOMAINS` 加 1 项 | 可选 | M5 |
+| ③ | [all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts)（6） | 1 行 import，`DOMAINS` 末尾加 1 项（带 `Fork:` 注释） | ✅ | M5 |
 | ④ | [tui.ts:3847](../../packages/tui/src/tui.ts:3847)（68） | `wantAlt` 改为"栈中任一可见覆盖层是 fullscreen" | 可选 | M1 视验证结果决定 |
 | ⑤ | [startup-composer.ts:89](../../packages/coding-agent/src/modes/startup-composer.ts:89)（5） | 在 `beginStartupComposer` 的 `composer.start(...)` 之前加 `openStartupWorkbench(composer);`，另加 1 行 import | ✅ | M3 之后 |
 | ⑥ | [tui.ts:1164](../../packages/tui/src/tui.ts:1164)（67） | 新增只读 getter `inputDeferred`，暴露私有 `#inputDeferred`；纯新增，不改已有行 | ✅ | M3 之后 |
+| ⑦ | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts)（5） | `hotkeyGroups` 返回前 `groups.push(forkHotkeyGroup(...))`，另加 1 行 import | ✅ | M5 |
 
 触点 ⑤ 还连带改了 1 个上游测试：[issue-9597-cold-launch-double-clear.test.ts](../../packages/coding-agent/test/issue-9597-cold-launch-double-clear.test.ts) 走真实预绘制路径，外壳打开期间启动清屏被延后，所以统计前先关闭启动外壳（带 `Fork:` 注释）。触点 ⑤ 本身由 [fork-workbench.test.ts](../../packages/coding-agent/test/fork-workbench.test.ts) 的启动用例守护：这一行在 rebase 中丢失，或被挪到 `start` 之后，测试都会失败。
 
@@ -283,7 +285,7 @@ export interface SidebarSession { path: string; title: string; modified: Date; s
 
 **Mac 注意**：`⌃↑`、`⌃↓` 默认被 Mission Control 占用。可以在"系统设置 → 键盘快捷键"里关掉这两项，也可以把 `prevTurn`、`nextTurn` 改到其他键。导航条点击和滚轮始终可用。
 
-**待办（M5）**：上游 `/hotkeys`（[command-controller.ts:931](../../packages/coding-agent/src/modes/controllers/command-controller.ts:931)）还列不出这些键。之后新增或改动工作台快捷键时，都要把说明同步加入 `/hotkeys`。
+`/hotkeys` 的 Workbench 分组由 `tui/src/fork/hotkeys.ts` 生成（M5，触点 ⑦）。之后新增或改动工作台快捷键时，要同步修改那里的说明。
 
 ### 6.2 设置（`fork/workbench-settings.ts`）
 
@@ -291,10 +293,10 @@ export interface SidebarSession { path: string; title: string; modified: Date; s
 |---|---|---|
 | `fork.workbench.enabled` | `true` | 总开关；关闭后快捷键也不再拦截 |
 | `fork.workbench.autoOpen` | `true` | 启动即进入外壳（预绘制时打开，`installWorkbench` 接管）；`ctrl+n` 仍可隐藏（目前是固定行为，尚无设置项） |
-| `fork.workbench.sidebarWidth` | `0` | 0 表示按比例自动计算 |
-| `fork.workbench.minColumns` | `100` | 终端列数低于该值时自动收起侧边栏 |
+| ~~`fork.workbench.sidebarWidth`~~ | — | 未做：宽度固定为终端的 22%，限制在 24～36 列（`layout.ts`） |
+| ~~`fork.workbench.minColumns`~~ | — | 未做：固定 100 列（`SIDEBAR_AUTO_COLUMNS`），`f2` 可手动覆盖 |
 
-M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen` 目前直接写成安装后打开）；M5 再决定是否接入设置系统（触点 ③）。
+M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Display）和 `omp config`。两项都在 `installWorkbench` 时读取，改动下次启动生效。宽度相关的两项用常量足够，需要时再加。
 
 ---
 
@@ -607,7 +609,18 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen
 - [ ] 设置项生效：关闭 `enabled` 后快捷键不再拦截；关闭 `autoOpen` 后启动停在原生界面（预绘制时也不打开），开启时启动即进入外壳（不会盖住 setup wizard）。
 - [ ] `/hotkeys` 列出全部工作台快捷键及其说明。
 - [ ] 完整跑一遍 M1～M4 的功能验收清单，没有回退。
-- [ ] 执行 `git diff main --stat`，确认上游文件的改动只有计划中的触点。
+- [x] 执行 `git diff main --stat`，确认上游文件的改动只有计划中的触点。
+
+> 自动测试覆盖：`enabled` 关闭时不安装外壳、`ctrl+n` 落到编辑器、预绘制打开的外壳会被连同输入路由一起移除；`autoOpen` 关闭时安装但不打开、`ctrl+n` 能打开，预绘制按旧缓存打开的外壳会在接管时关闭、再打开时宿主已是会话；会话中改设置会回写启动缓存；`/hotkeys` 的 Workbench 分组随改键变化、未绑定显示 `Disabled`。启动缓存的读写在隔离目录里用真实进程验证过。其余为手动验收。
+
+**M5 实施记录**：
+
+- **设置**：`fork/workbench-settings.ts` 注册 `fork.workbench.enabled`、`fork.workbench.autoOpen`，经触点 ③ 进入设置面板和 `omp config`。`sidebarWidth`、`minColumns` 没做，见 §6.2。
+- **预绘制可读**：没有扩展上游的 ComposerCache（要改它的 kind 和格式版本，又多一处触点），而是在同一个缓存目录放 `workbench.json`（`{"open": boolean}`，即 `enabled && autoOpen`）。预绘制同步读取，没有文件时按打开处理；`installWorkbench` 读到的设置和缓存不一致时重写，之后监听这两项设置，在 `/settings` 里改了也立即回写（值相同不写）。测试运行时既不读也不写，和 ComposerCache 一致。
+- **缓存过期**：不经过运行中的 omp 改设置（`omp config set`、手动编辑配置文件）后的第一次启动，预绘制仍按旧缓存行事。缓存是全局一份，两个项目的项目级设置不同时，交替启动每次都会这样。缓存说打开、设置说关闭时，接管时关闭外壳（`autoOpen` 关闭）或连输入路由一起移除（`enabled` 关闭），会闪一次；之后缓存已更新。
+- **`/hotkeys`**：新触点 ⑦。分组内容在 `tui/src/fork/hotkeys.ts`：四个工作台快捷键取实际绑定，另有侧边栏按键（`/`、`n`、回车、Esc）和鼠标操作两行说明。
+- **依赖清单**：写在 `tui/src/fork/workbench/index.ts` 顶部，只列 API 名称，位置见 §11。
+- **CHANGELOG**：`packages/coding-agent/CHANGELOG.md` 的 `[Unreleased]` 下加了 `### Added`。上游每次发版都会改这里，同步时容易冲突，保留 fork 的那一行即可。
 
 ---
 
@@ -633,7 +646,7 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen
 
 **同步上游的流程**：
 
-1. 合并上游后，冲突只可能出现在触点 ① ② ⑤ ⑥（以及选用的 ③ ④）的几行上，手动保留即可。
+1. 合并上游后，冲突只可能出现在触点 ① ② ③ ⑤ ⑥ ⑦（以及可选的 ④）和 CHANGELOG 的几行上，手动保留即可。
 2. 运行 `bun check` 和外壳的集成测试，它们能发现上游内部 API 的漂移（见 §11）。
 3. 有 API 变化时，对照 `fork/workbench/index.ts` 顶部的依赖清单逐项修复。
 
@@ -658,7 +671,12 @@ M1～M4 期间，这些值先写成 `fork/workbench.ts` 中的常量（`autoOpen
 | `routeSgrMouseInput` | [mouse.ts](../../packages/tui/src/mouse.ts) | 鼠标解析 |
 | `sliceByColumn` | [utils.ts:752](../../packages/tui/src/utils.ts:752) | 选区切片 |
 | `KEYBINDINGS` / `Keybindings` 接口 | [app-keybindings.ts:89](../../packages/tui/src/app-keybindings.ts:89) | 快捷键注册 |
+| `hotkeyGroups` | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts) | `/hotkeys` 的 Workbench 分组（触点 ⑦） |
+| `register` / `combine` / `listen` / `DOMAINS` | [registry.ts](../../packages/coding-agent/src/config/registry.ts)、[all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts) | 设置项（触点 ③）；`listen` 在会话中改设置时回写启动缓存 |
+| `getComposerCacheDbPath` | [dirs.ts](../../packages/utils/src/dirs.ts) | 启动缓存 `workbench.json` 放在同一目录 |
 | `SessionManager.listForPicker` / `sessionDisplayName` | [session-listing.ts](../../packages/coding-agent/src/session/session-listing.ts) | 会话列表 |
+| `rankSessionSearchMatches` / `SessionSelectorEntry` | [session-selector.ts](../../packages/tui/src/overlays/session-selector.ts) | 侧边栏过滤 |
+| `SessionManager.onSessionNameChanged` | [session-manager.ts](../../packages/coding-agent/src/session/session-manager.ts) | 改名后刷新列表 |
 | `handleResumeSession` / `handleNewCommand` | [selector-controller.ts:1974](../../packages/coding-agent/src/modes/controllers/selector-controller.ts:1974) | 切换、新建会话 |
 | `copyToClipboard` | [clipboard.ts:117](../../packages/coding-agent/src/utils/clipboard.ts:117) | 复制 |
 

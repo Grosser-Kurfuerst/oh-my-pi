@@ -5,7 +5,10 @@ import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { Settings } from "../src/config/settings";
 import { installWorkbench, type WorkbenchMode } from "../src/fork/workbench";
+import { cfgWorkbenchAutoOpen } from "../src/fork/workbench-settings";
+import * as workbenchStartup from "../src/fork/workbench-startup";
 import type { SessionInfo } from "../src/session/session-listing";
 import { SessionManager } from "../src/session/session-manager";
 import {
@@ -56,7 +59,7 @@ function useAppKeybindings(): void {
 }
 
 /** The InteractiveMode stand-in: transcript and editor area mounted, actions recorded. */
-function mountMode(composer: Composer, editor: Component) {
+function mountMode(composer: Composer, editor: Component, settings = Settings.isolated()) {
 	const chatContainer = new TranscriptContainer();
 	const editorContainer = new Container();
 	editorContainer.addChild(editor);
@@ -68,6 +71,7 @@ function mountMode(composer: Composer, editor: Component) {
 		chatContainer,
 		editorContainer,
 		editor,
+		settings,
 		showWarning: message => calls.push(`warning: ${message}`),
 		showError: message => calls.push(`error: ${message}`),
 		toggleThinkingBlockVisibility: () => calls.push("thinking"),
@@ -99,7 +103,7 @@ function mountMode(composer: Composer, editor: Component) {
 	return { mode, chatContainer, calls, renameSession };
 }
 
-function harness(columns = 60, configure?: (mode: WorkbenchMode) => void) {
+function harness(columns = 60, configure?: (mode: WorkbenchMode) => void, settings?: Settings) {
 	useAppKeybindings();
 	const terminal = new VirtualTerminal(columns, 12);
 	const scheduler = new VirtualRenderScheduler();
@@ -110,12 +114,12 @@ function harness(columns = 60, configure?: (mode: WorkbenchMode) => void) {
 	});
 	cleanups.push(() => composer.stop());
 	const editor = new Editor();
-	const { mode, calls, renameSession } = mountMode(composer, editor);
+	const { mode, calls, renameSession } = mountMode(composer, editor, settings);
 	configure?.(mode);
 	composer.start({ playWelcomeIntro: false });
 	composer.ui.setFocus(editor);
 	const shell = installWorkbench(mode);
-	cleanups.push(() => shell.close());
+	cleanups.push(() => shell?.close());
 	const settle = async () => {
 		// Let a session list load resolve, then paint what it requested.
 		await scheduler.settle(terminal);
@@ -152,7 +156,7 @@ function rowOf(terminal: VirtualTerminal, text: string): number {
 describe("workbench transcript actions", () => {
 	it("opens on install and runs the actions upstream stands down for while the shell is frontmost", async () => {
 		const h = harness();
-		expect(h.shell.isOpen).toBe(true);
+		expect(h.shell?.isOpen).toBe(true);
 
 		await h.press(CTRL_O);
 		await h.press(CTRL_T);
@@ -164,14 +168,14 @@ describe("workbench transcript actions", () => {
 		setNativeRendering(true);
 		cleanups.push(() => setNativeRendering(false));
 		const h = harness();
-		expect(h.shell.isOpen).toBe(false);
+		expect(h.shell?.isOpen).toBe(false);
 		expect(h.calls).toEqual([]);
 	});
 
 	it("leaves the keys alone when the shell is closed or covered", async () => {
 		const h = harness();
 		await h.press(CTRL_N);
-		expect(h.shell.isOpen).toBe(false);
+		expect(h.shell?.isOpen).toBe(false);
 		await h.press(CTRL_O);
 		expect(h.calls).toEqual([]);
 		expect(h.editor.typed).toBe(CTRL_O);
@@ -227,13 +231,86 @@ describe("workbench at startup", () => {
 		const { mode, chatContainer } = mountMode(lease.composer, lease.composer.editor);
 		chatContainer.addChild({ render: () => ["answer 0"] });
 		const shell = installWorkbench(mode);
-		cleanups.push(() => shell.close());
+		cleanups.push(() => shell?.close());
 		terminal.sendInput("hello");
 		await terminal.waitForRender();
 		// One shell, now showing the transcript; a second one would stay stacked after the toggle.
 		expect(lease.composer.ui.overlayStack).toHaveLength(1);
 		expect(rowOf(terminal, "answer 0")).toBe(0);
 		expect(rowOf(terminal, "hello")).toBeGreaterThanOrEqual(terminal.rows - 4);
+		terminal.sendInput(CTRL_N);
+		await terminal.waitForRender();
+		expect(lease.composer.ui.hasOverlay()).toBe(false);
+	});
+});
+
+describe("workbench settings", () => {
+	afterEach(() => stopPendingStartupComposer());
+
+	it("with the workbench disabled installs nothing and leaves its keys to the editor", async () => {
+		const h = harness(60, undefined, Settings.isolated({ "fork.workbench.enabled": false }));
+		expect(h.shell).toBeUndefined();
+		expect(h.composer.ui.hasOverlay()).toBe(false);
+		await h.press(CTRL_N);
+		expect(h.composer.ui.hasOverlay()).toBe(false);
+		expect(h.editor.typed).toBe(CTRL_N);
+	});
+
+	it("with autoOpen off stays inline until the toggle opens it", async () => {
+		const h = harness(60, undefined, Settings.isolated({ "fork.workbench.autoOpen": false }));
+		expect(h.shell?.isOpen).toBe(false);
+		await h.press(CTRL_N);
+		expect(h.shell?.isOpen).toBe(true);
+	});
+
+	it("records a /settings change for the next launch's prepaint", async () => {
+		const remembered = spyOn(workbenchStartup, "rememberStartupOpen");
+		const settings = Settings.isolated();
+		harness(60, undefined, settings);
+		expect(remembered).toHaveBeenLastCalledWith(true);
+		cfgWorkbenchAutoOpen.set(settings, false);
+		await Bun.sleep(0);
+		expect(remembered).toHaveBeenLastCalledWith(false);
+	});
+
+	it("closes the shell a stale cache opened at prepaint, then reopens it over the session", async () => {
+		useAppKeybindings();
+		const terminal = new CapturingTerminal(60, 12);
+		beginStartupComposer({ terminal, version: "9.9.9", cache: false, preferences: { quiet: true } });
+		await terminal.waitForRender();
+		const lease = takeStartupComposerLease()!;
+		cleanups.push(() => lease.composer.stop());
+		lease.adopt();
+		expect(lease.composer.ui.hasOverlay()).toBe(true);
+
+		const settings = Settings.isolated({ "fork.workbench.autoOpen": false });
+		const { mode, chatContainer } = mountMode(lease.composer, lease.composer.editor, settings);
+		chatContainer.addChild({ render: () => ["answer 0"] });
+		const shell = installWorkbench(mode);
+		cleanups.push(() => shell?.close());
+		expect(lease.composer.ui.hasOverlay()).toBe(false);
+		// The toggle reopens it hosted by the session: the transcript is inside.
+		terminal.sendInput(CTRL_N);
+		await terminal.waitForRender();
+		expect(lease.composer.ui.overlayStack).toHaveLength(1);
+		expect(rowOf(terminal, "answer 0")).toBe(0);
+	});
+
+	it("removes the shell the prepaint opened when the settings turned the workbench off", async () => {
+		useAppKeybindings();
+		const terminal = new CapturingTerminal(60, 12);
+		beginStartupComposer({ terminal, version: "9.9.9", cache: false, preferences: { quiet: true } });
+		await terminal.waitForRender();
+		const lease = takeStartupComposerLease()!;
+		cleanups.push(() => lease.composer.stop());
+		lease.adopt();
+		expect(lease.composer.ui.hasOverlay()).toBe(true);
+
+		const settings = Settings.isolated({ "fork.workbench.enabled": false });
+		const { mode } = mountMode(lease.composer, lease.composer.editor, settings);
+		expect(installWorkbench(mode)).toBeUndefined();
+		expect(lease.composer.ui.hasOverlay()).toBe(false);
+		// Its input routing went with it: the toggle no longer reopens it.
 		terminal.sendInput(CTRL_N);
 		await terminal.waitForRender();
 		expect(lease.composer.ui.hasOverlay()).toBe(false);

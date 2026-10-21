@@ -1,6 +1,7 @@
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type AppKeybinding, formatKeyHint, type KeybindingsManager, keyHintPlatform } from "./app-keybindings";
 import { Markdown } from "./components/markdown";
+import { forkHotkeyGroup } from "./fork/hotkeys";
 import { matchesSelectCancel } from "./keybinding-matchers";
 import type { KeyName } from "./key-hint-format";
 import { canonicalKeyId } from "./keybindings";
@@ -176,6 +177,8 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 			],
 		},
 	];
+	// Fork: workbench shortcuts (docs/fork/README.md).
+	groups.push(forkHotkeyGroup(bindings.keybindings));
 	return groups;
 }
 

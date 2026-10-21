@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a fullscreen workbench (`ctrl+n`) with a session sidebar (`f2`), a turn navigation rail (`ctrl+up`/`ctrl+down`) and mouse text selection; turn it off or keep startup inline with `fork.workbench.enabled` / `fork.workbench.autoOpen`
+
 ## [18.12.3] - 2026-10-19
 
 ### Added

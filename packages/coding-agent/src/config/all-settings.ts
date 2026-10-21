@@ -40,6 +40,7 @@ import * as commandsSettings from "../commands/settings";
 import * as streamSettings from "../stream/settings";
 import * as commitSettings from "../commit/settings";
 import * as cliGcSettings from "../cli/gc-settings";
+import * as forkWorkbenchSettings from "../fork/workbench-settings";
 import * as telemetrySettings from "../telemetry-settings";
 
 const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
@@ -78,6 +79,8 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	streamSettings,
 	commitSettings,
 	cliGcSettings,
+	// Fork: workbench settings (docs/fork/README.md).
+	forkWorkbenchSettings,
 ];
 
 /** Domains listed immediately before `before` (a setting of a DOMAINS entry) instead of in DOMAINS order. */
