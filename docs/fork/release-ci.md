@@ -2,6 +2,8 @@
 
 本文说明 fork 如何自动跟进上游发布、构建并发布自己的 omp 二进制，以及本机 omp 怎样安装和更新到 fork 的构建。
 
+> 交给别人或 AI 维护时，先读 [§8 维护规则](#8-维护规则)。
+
 ## 1. 整体结构
 
 ```
@@ -26,7 +28,7 @@ can1357/oh-my-pi ──(定时拉取 v* 稳定版 tag)──▶ Grosser-Kurfuers
 触发时机：
 
 - 每 6 小时一次（`cron: 17 */6 * * *`，UTC）；
-- 推送到 `custom`；
+- 推送到 `custom`（包括只改文档的提交，每次 push 都会重新构建一次）；
 - 在 Actions 页面手动运行，或执行 `gh workflow run fork-release.yml -R Grosser-Kurfuerst/oh-my-pi --ref custom`。
 
 同一时间只运行一个实例，后来的排队，不取消正在运行的。
@@ -45,6 +47,8 @@ can1357/oh-my-pi ──(定时拉取 v* 稳定版 tag)──▶ Grosser-Kurfuers
 
 CI 往 `custom` 推合并提交时会再触发一次运行。那次运行发现上游已合并、Release 已存在，就什么都不做。
 
+某一步失败后不需要手动收拾：合并已经推上去的话，下一次运行会跳过合并，发现 Release 不存在，就重新构建。
+
 ## 3. 仓库配置（已完成，换机器或重建 fork 时参考）
 
 1. **默认分支设为 `custom`**（Settings → General）。定时任务只会运行默认分支上的工作流文件。
@@ -52,11 +56,15 @@ CI 往 `custom` 推合并提交时会再触发一次运行。那次运行发现�
    ```bash
    gh workflow disable ci.yml -R Grosser-Kurfuerst/oh-my-pi
    ```
+   上游以后**新增**的工作流文件合并进来后默认是启用的，见 [§7.1](#71-合并上游冲突) 的检查。
 3. **Secret `FORK_SYNC_TOKEN`**：fine-grained PAT，只授权本仓库，需要以下权限：
    - **Contents: Read and write**：push、发 Release；
    - **Workflows: Read and write**：合并上游时，如果上游改了 `.github/workflows/`，没有这个权限会被拒绝推送。
 
    默认的 `GITHUB_TOKEN` 不能用：它没有推送工作流文件的权限，并且用它 push 不会触发后续的工作流。
+
+   PAT 有到期时间，在创建它的账号下 Settings → Developer settings → Personal access tokens → Fine-grained tokens 查看，到期前重新生成并更新 Secret。Secret 只能覆盖，不能读出原值。
+4. **失败通知**：定时运行失败的邮件只发给最后修改 `cron` 那一行的人（没人改过就是创建工作流的人）；push 触发的运行发给推送者，CI 自己推送的合并提交算作 PAT 所属账号。换人维护时，新维护者要自己留意 Actions 页面，或者在仓库 Watch 设置里订阅 Actions。
 
 ## 4. build-index 索引格式
 
@@ -82,6 +90,12 @@ api/products/omp/versions/<版本>/linux-x86_64
 - `download` 必须是 HTTPS。
 
 不提供 `patch` 字段，omp 会下载完整文件。
+
+这个分支**由 CI 维护**：每次发布新 Release，CI 追加一个 `chore(build-index): publish kf-v...` 提交，覆盖 `latest/`，并写入（或覆盖）当前版本的 `versions/` 文件。没有新构建时不会改动，也从不改写历史。
+
+- `latest/` 是独立二进制 `omp update` 和启动检查唯一读取的文件。
+- `versions/` 只在 bun/npm 全局安装被接管成独立二进制时用到。同一版本的多次构建共用一个文件，指向最后一次构建。旧版本的文件不会删除，Release 被清理后，这些文件会指向已经删除的下载地址。
+- 本地的 `build-index` 分支不会自动更新，落后远程是正常的。要看最新内容就 `git fetch origin build-index`，然后看 `origin/build-index`。
 
 检查当前索引：
 
@@ -131,6 +145,7 @@ sha256sum ~/.local/bin/omp
 - raw.githubusercontent 大约有 5 分钟缓存，刚发布的构建可能要过几分钟才能检测到。
 - 每次更新都下载约 250MB 的完整文件，因为没有官方的增量补丁。
 - 已经在运行的 omp 进程仍然是旧版本，需要重启。
+- 从源码目录运行的 omp 不会提示更新。
 
 ### 5.3 回退到官方版
 
@@ -148,7 +163,23 @@ PI_BUILD_URL=https://build.stencil.so omp update --force
 
 官方版之后的 `omp update` 会回到官方的更新渠道。想再切回 fork 版，重复 5.1。
 
+### 5.4 回退到 fork 的上一个构建
+
+`omp update` 只能安装 `latest`，不能选旧构建。新构建有问题时，从 Releases 页面下载之前的构建（只保留最近 3 个），手动替换：
+
+```bash
+curl -fL -o ~/.local/bin/omp.new https://github.com/Grosser-Kurfuerst/oh-my-pi/releases/download/<旧的 kf-v tag>/omp-linux-x64
+```
+
+```bash
+chmod +x ~/.local/bin/omp.new && mv ~/.local/bin/omp.new ~/.local/bin/omp
+```
+
+这只救本机，源头的修复见 [§7.6](#76-坏构建怎么处理)。
+
 ## 6. 本地开发流程
+
+需要：仓库写权限；本地装好 bun（运行检查和测试）；可选装好 `gh` 并登录（看 CI 日志）。
 
 本地需要先添加上游远程（只做一次）：
 
@@ -166,7 +197,7 @@ git remote add upstream https://github.com/can1357/oh-my-pi.git
 
 ### 7.1 合并上游冲突
 
-现象：工作流在 `Merge latest upstream release` 失败，日志中有 `Merging vX.Y.Z conflicts`，GitHub 会发邮件通知。
+现象：工作流在 `Merge latest upstream release` 失败，日志中有 `Merging vX.Y.Z conflicts`。
 
 处理：
 
@@ -179,10 +210,25 @@ git fetch upstream --tags
 ```
 
 ```bash
-git merge vX.Y.Z
+git merge --no-ff -m "chore(fork): merge upstream vX.Y.Z" vX.Y.Z
 ```
 
-按 [README.md §3](README.md) 处理上游触点的冲突。`build-service.ts` 冲突时**必须保留 fork 的 `DEFAULT_BUILD_URL`**，否则 `omp update` 会装回官方版。然后按 [README.md §6](README.md) 的检查清单验证，提交后普通 `git push`，push 会触发构建。
+提交信息和 CI 自动合并时保持一致。解决冲突时：
+
+- 按 [README.md §3](README.md) 处理上游触点的冲突。`build-service.ts` 冲突时**必须保留 fork 的 `DEFAULT_BUILD_URL`**，否则 `omp update` 会装回官方版。
+- `bun.lock` 冲突时取上游的版本（`git checkout --theirs bun.lock`），再执行 `bun install` 确认没有变化。fork 没有加依赖，正常不会冲突。
+- 检查上游有没有新增工作流文件，有的话 push 之后禁用（见 §3）：
+  ```bash
+  git diff --name-status --diff-filter=A HEAD vX.Y.Z -- .github/workflows/
+  ```
+
+然后按 [README.md §6](README.md) 的检查清单验证，提交后普通 `git push`，push 会触发构建。
+
+CI 自动合并成功时，上游新增的工作流也会进来，同样要检查。看最近一次上游合并带进来的新工作流：
+
+```bash
+m=$(git log -1 --merges --grep='merge upstream' --format=%H origin/custom); git diff --name-status --diff-filter=A "$m^1" "$m" -- .github/workflows/
+```
 
 可以先执行 `git config rerere.enabled true`，让 git 记住冲突的解决方式，下次遇到同样的冲突自动套用。
 
@@ -205,7 +251,8 @@ git merge vX.Y.Z
 | `Publish GitHub release` 失败，fork 没有 Release | 添加 `upstream` 远程后，`gh` 默认操作上游仓库 | 已在 job 环境变量加 `GH_REPO: ${{ github.repository }}`，所有 `gh` 命令都指向 fork |
 | checkout 失败或推送 403 | `FORK_SYNC_TOKEN` 过期或权限不足 | 重新生成 PAT（权限见 §3），更新 Secret |
 | 推送时提示需要 `workflow` 权限 | 上游改了 `.github/workflows/`，PAT 缺少 Workflows 权限 | 给 PAT 加上 Workflows: Read and write |
-| 安装 native 插件时下载 404 | 上游刚发布，npm 包还没上传；或者 `custom` 不在上游发布 tag 上 | 稍后手动重新运行；确认 `custom` 是从上游 `vX.Y.Z` 合并来的 |
+| 安装 native 插件时下载 404 | 上游刚发布，npm 包还没上传；或者 `custom` 不在上游发布 tag 上 | 前一种不用管，下一次定时运行会自动重建，急的话手动运行；后一种确认 `custom` 是从上游 `vX.Y.Z` 合并来的 |
+| Actions 里有上游的工作流一直排队或失败 | 上游新增了工作流文件，合并进来后默认启用 | 用 `gh workflow disable` 禁用，见 §3 |
 | 定时任务不再运行 | 公开仓库 60 天没有活动时，GitHub 会停用定时任务 | 在 Actions 页面重新启用。上游发版频繁，`build-index` 会经常有提交，一般不会出现 |
 | 构建报 native 版本戳不匹配 | fork 改了 `crates/` 或 `packages/natives`，npm 上的预编译插件对不上 | 需要在工作流里安装 Rust 工具链，用 `bun run build:native` 自行编译 |
 
@@ -213,4 +260,59 @@ git merge vX.Y.Z
 
 - 只构建 linux-x64（`linux-x86_64` / `omp-linux-x64`）。要支持其他平台，需要按 `resolveBuildHost` 的命名增加构建矩阵，并为每个平台写一份索引。
 - fork 改动 Rust 代码时，不能使用 npm 上的预编译插件（见 §7.3）。
+- 只保留最近 3 个 Release，更早的构建无法回退（见 §4 关于 `versions/` 的说明）。
 - `actions/checkout@v4` 有 Node.js 20 的弃用警告，不影响运行，以后可以升级。
+
+### 7.5 健康检查
+
+确认整条链路正常：
+
+1. 最近一次运行成功：
+   ```bash
+   gh run list -R Grosser-Kurfuerst/oh-my-pi -w fork-release.yml -L 5
+   ```
+2. 索引指向 `custom` 的最新提交：用 [§4](#4-build-index-索引格式) 的命令取出 `download`，其中 tag 的最后 8 位应该等于下面命令的输出（刚 push、构建还没跑完时会落后一个提交）：
+   ```bash
+   git fetch origin && git rev-parse --short=8 origin/custom
+   ```
+3. 下载地址可用，返回 `200`：
+   ```bash
+   curl -sIL -o /dev/null -w '%{http_code}\n' <download 地址>
+   ```
+4. 本机装的就是索引里的构建：`sha256sum ~/.local/bin/omp` 等于索引里的 `sha256`。
+
+### 7.6 坏构建怎么处理
+
+构建能通过冒烟测试，但运行有问题时：
+
+1. 本机先按 [§5.4](#54-回退到-fork-的上一个构建) 换回上一个构建。
+2. 在 `custom` 上修复，或者 `git revert` 出问题的提交，普通 `git push`。CI 会用新提交构建，覆盖 `latest`。
+3. 运行完成后，执行 `omp update --force`。
+
+不要用手改索引的方式回退（见 §8）。
+
+### 7.7 修改工作流
+
+- 工作流文件只在 `custom` 上，上游没有这个文件，不会冲突。
+- 改完推到 `custom` 就会触发一次运行，这次运行就是测试；只想重跑时用手动运行。
+- 保留 job 环境变量里的 `GH_REPO`，否则 `gh` 会去操作上游仓库。
+- `set -o pipefail` 下不要用 `| head` 之类提前关闭管道的写法（见 §7.3）。
+- 改动 `BUILD_TARGET`、`BINARY_NAME` 前先对照 `resolveBuildHost`，名字对不上 omp 会拒绝安装。
+
+## 8. 维护规则
+
+不要做：
+
+- **不要 force push `custom` 或 `build-index`。** 两个分支都只追加不改写，CI 和本地都依赖普通 push/pull。
+- **不要合并上游的 `main` 或 canary tag。** 只合并稳定版 tag `vX.Y.Z`，否则版本号和 npm 上的 native 插件对不上，构建失败。
+- **不要手改 `build-index` 下 `api/` 里的 JSON。** `size`、`sha256` 对不上时 omp 会拒绝安装；手改的内容也会在下一次发布时被覆盖。README 等说明文件可以改。
+- **不要把本地的 `build-index` 分支直接 push。** 它通常落后远程，要改说明文件时，先 `git fetch origin build-index`，基于 `origin/build-index` 修改。
+- **不要改掉或丢掉 fork 的 `DEFAULT_BUILD_URL`**（合并冲突时尤其注意）。
+- **不要把构建产物提交进仓库**（`packages/coding-agent/binaries/`、`packages/natives/native/*.node`）。
+- **不要删掉工作流里的 `GH_REPO`**，不要换回默认的 `GITHUB_TOKEN`（原因见 §3）。
+
+要做：
+
+- 每次合并上游后，检查有没有新增的上游工作流（§7.1）。
+- 改了上游文件就在 [README.md §3](README.md) 登记触点。
+- PAT 到期前更新 Secret（§3）。

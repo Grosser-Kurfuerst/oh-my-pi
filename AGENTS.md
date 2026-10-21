@@ -347,7 +347,7 @@ The script handles version bump, CHANGELOG finalization, commit, tag, publish, a
 
 ## Fork 改造（custom 分支）
 
-本仓库是上游 omp 的 fork，`custom` 分支会定期合并上游 `main`。
+本仓库是上游 omp 的 fork。`custom` 分支由 CI 自动合并上游的稳定版发布 tag（`vX.Y.Z`），不合并上游 `main`，并构建发布 fork 自己的 omp。同步、构建、发布的维护方式和禁止事项见 `docs/fork/release-ci.md`。
 
 - 改造要尽可能少地与上游代码冲突：
   - fork 自有代码放在各包的 `src/fork/` 下，测试文件名以 `fork-` 开头；
