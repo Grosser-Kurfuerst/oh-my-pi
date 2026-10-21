@@ -1,0 +1,145 @@
+name: Fork sync & release
+
+# Rebases the fork's `custom` branch onto upstream's newest stable release tag,
+# builds the linux-x64 binary, publishes it as a GitHub release, and updates the
+# static build index on the `build-index` branch that the fork's omp updates from.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # 每 6 小时检查一次上游发布
+  workflow_dispatch:
+  push:
+    branches: [custom]       # 你自己的改动推上来时也重新构建
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_URL: https://github.com/can1357/oh-my-pi.git
+  BUILD_TARGET: linux-x86_64   # build-service.ts resolveBuildHost 的 target
+  BINARY_NAME: omp-linux-x64   # resolveBuildHost 的 fileName
+
+jobs:
+  sync-and-release:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: custom
+          fetch-depth: 0
+          token: ${{ secrets.FORK_SYNC_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # 只跟上游稳定版 tag（排除 v*-canary.*），保证版本号与 npm 上的 natives 对得上
+      - name: Rebase onto latest upstream release
+        run: |
+          set -euo pipefail
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream '+refs/tags/v*:refs/tags/v*'
+          latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -v -- '-' | head -n1)
+          base=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' HEAD)
+          echo "upstream latest: $latest, custom base: $base"
+          if [ "$latest" != "$base" ]; then
+            if ! git rebase "$latest"; then
+              git rebase --abort
+              echo "::error::Rebase onto $latest conflicts; rebase custom locally and push."
+              exit 1
+            fi
+            git push --force-with-lease=custom origin HEAD:custom
+          fi
+
+      # 每个 commit 对应一个唯一的 release tag，已构建过就跳过
+      - name: Resolve build id
+        id: meta
+        run: |
+          version=$(jq -r .version packages/coding-agent/package.json)
+          tag="kf-v${version}-$(git rev-parse --short=8 HEAD)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.meta.outputs.skip == 'false'
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        if: steps.meta.outputs.skip == 'false'
+        run: bun install --frozen-lockfile
+
+      - name: Install prebuilt native addons from npm
+        if: steps.meta.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 "https://registry.npmjs.org/@oh-my-pi/pi-natives-linux-x64/-/pi-natives-linux-x64-${VERSION}.tgz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          cp "$RUNNER_TEMP"/package/pi_natives.linux-x64-{baseline,modern}.node packages/natives/native/
+
+      - name: Build binary
+        if: steps.meta.outputs.skip == 'false'
+        env:
+          RELEASE_TARGETS: linux-x64
+        run: |
+          bun run ci:release:build-binaries
+          "packages/coding-agent/binaries/$BINARY_NAME" --version
+
+      # 先发 release 再写索引，索引永远不会指向不存在的文件
+      - name: Publish GitHub release
+        if: steps.meta.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          gh release create "$TAG" "packages/coding-agent/binaries/$BINARY_NAME" \
+            --target "$(git rev-parse HEAD)" \
+            --title "omp $VERSION (fork $(git rev-parse --short=8 HEAD))" \
+            --notes "Based on upstream v$VERSION." \
+            --latest
+
+      - name: Update build index
+        if: steps.meta.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          bin="$PWD/packages/coding-agent/binaries/$BINARY_NAME"
+          size=$(stat -c%s "$bin")
+          sha=$(sha256sum "$bin" | cut -d' ' -f1)
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${BINARY_NAME}"
+          answer=$(jq -n --arg v "$VERSION" --arg n "$BINARY_NAME" --argjson s "$size" --arg h "$sha" --arg u "$url" \
+            '{build: {version: $v}, file: {name: $n, size: $s, sha256: $h}, download: $u}')
+          git worktree add "$RUNNER_TEMP/index" origin/build-index
+          cd "$RUNNER_TEMP/index"
+          for p in "api/products/omp/latest/$BUILD_TARGET" "api/products/omp/versions/$VERSION/$BUILD_TARGET"; do
+            mkdir -p "$(dirname "$p")"
+            printf '%s\n' "$answer" > "$p"
+          done
+          git add api
+          git commit -m "chore(build-index): publish $TAG"
+          git push origin HEAD:build-index
+
+      # 只保留最近 3 个 fork release，每个约 250MB
+      - name: Prune old releases
+        if: steps.meta.outputs.skip == 'false'
+        run: |
+          gh release list --limit 100 --json tagName --jq '.[].tagName' \
+            | grep '^kf-v' | tail -n +4 \
+            | xargs -r -I{} gh release delete {} --cleanup-tag -y
