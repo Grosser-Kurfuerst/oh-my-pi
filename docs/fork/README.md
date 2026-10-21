@@ -72,7 +72,7 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 - 工作台一直开到退出时，启动时的清屏不会执行，终端保留打开 omp 之前的回滚内容（和 vim、less 一样）。
 - 进入全屏到切到 raw 输入之间约 0.4 秒，滚轮在部分终端会变成方向键。
 - 工作台打开时不能用终端原生搜索和选择（Tabby 按住 Shift、Mac 按住 Option 可绕过）。
-- `omp update` 安装 fork 的构建。
+- `omp update` 安装 fork 的构建。只改 fork 代码的构建版本号为 `<下一个 patch>-kf.N`（如 `18.12.6-kf.3`），`omp --version` 也显示这个，规则见 [release-ci.md §2.1](release-ci.md)。
 
 ## 6. 同步上游检查清单
 

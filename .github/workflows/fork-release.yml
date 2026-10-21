@@ -64,12 +64,34 @@ jobs:
           fi
           git push origin HEAD:custom
 
+      # fork 版本号：刚合并完上游时就是上游版本 X.Y.Z；之后每个 fork 提交为
+      # X.Y.(Z+1)-kf.N，N 是上游合并之后 custom 第一父链上的提交数。
+      # 这样只改 fork 代码也会比上一次构建高，而上游的 X.Y.(Z+1) 正式版又比它高。
       # 每个 commit 对应一个唯一的 release tag，已构建过就跳过
       - name: Resolve build id
         id: meta
         run: |
-          version=$(jq -r .version packages/coding-agent/package.json)
+          set -euo pipefail
+          # natives 的版本号始终是上游版本，npm 上的预编译插件按它下载，构建时也不改它
+          base=$(jq -r .version packages/natives/package.json)
+          tag_commit=$(git rev-parse "v${base}^{commit}")
+          # 第一父链上也有上游自己的合并提交，要找第二父提交正好是这个 tag 的那次合并
+          merge=$(git rev-list --first-parent --merges --parents HEAD \
+            | awk -v t="$tag_commit" '$3 == t && !found { print $1; found = 1 }')
+          if [ -z "$merge" ]; then
+            echo "::error::No merge of v$base found on custom's first-parent history."
+            exit 1
+          fi
+          count=$(git rev-list --count --first-parent "$merge..HEAD")
+          if [ "$count" -eq 0 ]; then
+            version="$base"
+          else
+            IFS=. read -r major minor patch <<< "$base"
+            version="${major}.${minor}.$((patch + 1))-kf.${count}"
+          fi
           tag="kf-v${version}-$(git rev-parse --short=8 HEAD)"
+          echo "Fork version $version (upstream $base)"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if gh release view "$tag" >/dev/null 2>&1; then
@@ -90,20 +112,39 @@ jobs:
       - name: Install prebuilt native addons from npm
         if: steps.meta.outputs.skip == 'false'
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          BASE_VERSION: ${{ steps.meta.outputs.base }}
         run: |
           set -euo pipefail
-          curl -fsSL --retry 3 "https://registry.npmjs.org/@oh-my-pi/pi-natives-linux-x64/-/pi-natives-linux-x64-${VERSION}.tgz" \
+          curl -fsSL --retry 3 "https://registry.npmjs.org/@oh-my-pi/pi-natives-linux-x64/-/pi-natives-linux-x64-${BASE_VERSION}.tgz" \
             | tar -xz -C "$RUNNER_TEMP"
           cp "$RUNNER_TEMP"/package/pi_natives.linux-x64-{baseline,modern}.node packages/natives/native/
 
+      # omp 的 VERSION 只来自 packages/utils/package.json。只在构建机上改，不提交：
+      # 提交的话每次合并上游都会在 version 行冲突。放在 bun install 之后，避免 --frozen-lockfile 失败。
+      # natives 的 package.json 不能改，embed-native 会核对插件里的版本戳。
+      - name: Stamp fork version
+        if: steps.meta.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          jq --arg v "$VERSION" '.version = $v' packages/utils/package.json > "$RUNNER_TEMP/utils-package.json"
+          mv "$RUNNER_TEMP/utils-package.json" packages/utils/package.json
+
+      # 二进制报告的版本必须等于索引里的版本，否则 omp 会一直提示有更新
       - name: Build binary
         if: steps.meta.outputs.skip == 'false'
         env:
           RELEASE_TARGETS: linux-x64
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
+          set -euo pipefail
           bun run ci:release:build-binaries
-          "packages/coding-agent/binaries/$BINARY_NAME" --version
+          reported=$("packages/coding-agent/binaries/$BINARY_NAME" --version)
+          if [ "$reported" != "omp/$VERSION" ]; then
+            echo "::error::Binary reports $reported, expected omp/$VERSION."
+            exit 1
+          fi
 
       # 先发 release 再写索引，索引永远不会指向不存在的文件
       - name: Publish GitHub release
@@ -111,11 +152,12 @@ jobs:
         env:
           TAG: ${{ steps.meta.outputs.tag }}
           VERSION: ${{ steps.meta.outputs.version }}
+          BASE_VERSION: ${{ steps.meta.outputs.base }}
         run: |
           gh release create "$TAG" "packages/coding-agent/binaries/$BINARY_NAME" \
             --target "$(git rev-parse HEAD)" \
             --title "omp $VERSION (fork $(git rev-parse --short=8 HEAD))" \
-            --notes "Based on upstream v$VERSION." \
+            --notes "Based on upstream v$BASE_VERSION." \
             --latest
 
       - name: Update build index

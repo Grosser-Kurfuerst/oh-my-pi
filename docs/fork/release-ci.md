@@ -36,9 +36,10 @@ can1357/oh-my-pi ──(定时拉取 v* 稳定版 tag)──▶ Grosser-Kurfuers
 | 步骤 | 内容 |
 |---|---|
 | Merge latest upstream release | 拉取上游 `v*` tag，取最新的稳定版。`custom` 已包含它就跳过；否则 `git merge --no-ff`，提交信息为 `chore(fork): merge upstream vX.Y.Z`，再普通 push 回 `custom`。冲突时撤销合并，并以 `::error::` 失败 |
-| Resolve build id | 版本号取自 `packages/coding-agent/package.json`，release tag 为 `kf-v<版本>-<commit 前 8 位>`。这个 tag 已有 Release 时，后续步骤全部跳过 |
-| 安装依赖、native 插件 | `bun install --frozen-lockfile`；从 npm 下载同版本的 `@oh-my-pi/pi-natives-linux-x64`，把 `baseline`、`modern` 两个 `.node` 放进 `packages/natives/native/` |
-| Build binary | `RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries`，和上游 release 构建用同一个命令；产物运行 `--version` 做冒烟测试 |
+| Resolve build id | 按 §2.1 算出 fork 版本号，release tag 为 `kf-v<fork 版本>-<commit 前 8 位>`。这个 tag 已有 Release 时，后续步骤全部跳过 |
+| 安装依赖、native 插件 | `bun install --frozen-lockfile`；按**上游版本号**从 npm 下载 `@oh-my-pi/pi-natives-linux-x64`，把 `baseline`、`modern` 两个 `.node` 放进 `packages/natives/native/` |
+| Stamp fork version | 只在构建机上把 `packages/utils/package.json` 的 `version` 改成 fork 版本号，不提交 |
+| Build binary | `RELEASE_TARGETS=linux-x64 bun run ci:release:build-binaries`，和上游 release 构建用同一个命令；产物的 `--version` 必须等于 `omp/<fork 版本>`，否则失败 |
 | Publish GitHub release | 上传 `omp-linux-x64`，tag 指向本次构建的 commit，标记为 latest |
 | Update build index | 计算大小和 sha256，写入 `build-index` 分支并 push |
 | Prune old releases | 只保留最近 3 个 `kf-v*` Release，其余连同 tag 一起删除（每个约 250MB） |
@@ -48,6 +49,24 @@ can1357/oh-my-pi ──(定时拉取 v* 稳定版 tag)──▶ Grosser-Kurfuers
 CI 往 `custom` 推合并提交时会再触发一次运行。那次运行发现上游已合并、Release 已存在，就什么都不做。
 
 某一步失败后不需要手动收拾：合并已经推上去的话，下一次运行会跳过合并，发现 Release 不存在，就重新构建。
+
+### 2.1 版本号规则
+
+| `custom` 的状态 | fork 版本号 | 例子（上游 `v18.12.5`） |
+|---|---|---|
+| 刚合并完上游 tag，之后没有 fork 提交 | 和上游相同 | `18.12.5` |
+| 合并之后有 N 个 fork 提交 | 下一个 patch 加 `-kf.N` | `18.12.6-kf.3` |
+
+- `kf` 是 fork 的标记（Kurfuerst），N 是上游合并提交之后，`custom` 第一父链上的提交数。`custom` 只追加，所以 N 只增不减。
+- 比较顺序：`18.12.5` < `18.12.6-kf.1` < `18.12.6-kf.2` < 上游的 `18.12.6`。所以只改 fork 代码时 omp 也会正常提示更新；上游发了 `18.12.6` 后，合并出来的 `18.12.6` 又比所有 `18.12.6-kf.N` 高。
+- 上游版本号取自 `packages/natives/package.json`。合并提交的判断依据是第二父提交正好是 `v<上游版本>` 这个 tag，所以 `custom` 必须通过合并上游 tag 来同步（§7.1）。
+
+两个硬性约束，改工作流时不能破坏：
+
+1. **二进制报告的版本必须等于索引里的版本。** omp 的 `VERSION` 只来自 `packages/utils/package.json`，构建时改的就是它；`Build binary` 会核对 `--version` 的输出。两者不一致时，omp 会一直提示有更新。
+2. **native 插件的版本号不能改。** `packages/natives/package.json` 保持上游版本，npm 上的插件也按上游版本下载，因为 `embed-native.ts` 会核对插件里的版本戳。
+
+版本号改动只发生在构建机上、不提交。如果提交到仓库，每次合并上游都会在 `version` 这一行冲突。仓库里各个 `package.json` 的版本号始终和上游一致，从源码运行时显示的也是上游版本。
 
 ## 3. 仓库配置（已完成，换机器或重建 fork 时参考）
 
@@ -91,10 +110,10 @@ api/products/omp/versions/<版本>/linux-x86_64
 
 不提供 `patch` 字段，omp 会下载完整文件。
 
-这个分支**由 CI 维护**：每次发布新 Release，CI 追加一个 `chore(build-index): publish kf-v...` 提交，覆盖 `latest/`，并写入（或覆盖）当前版本的 `versions/` 文件。没有新构建时不会改动，也从不改写历史。
+这个分支**由 CI 维护**：每次发布新 Release，CI 追加一个 `chore(build-index): publish kf-v...` 提交，覆盖 `latest/`，并写入当前版本的 `versions/` 文件。没有新构建时不会改动，也从不改写历史。
 
 - `latest/` 是独立二进制 `omp update` 和启动检查唯一读取的文件。
-- `versions/` 只在 bun/npm 全局安装被接管成独立二进制时用到。同一版本的多次构建共用一个文件，指向最后一次构建。旧版本的文件不会删除，Release 被清理后，这些文件会指向已经删除的下载地址。
+- `versions/` 只在 bun/npm 全局安装被接管成独立二进制时用到。每个 fork 版本号一个文件。旧版本的文件不会删除，Release 被清理后，这些文件会指向已经删除的下载地址。
 - 本地的 `build-index` 分支不会自动更新，落后远程是正常的。要看最新内容就 `git fetch origin build-index`，然后看 `origin/build-index`。
 
 检查当前索引：
@@ -121,9 +140,9 @@ PI_BUILD_URL=https://raw.githubusercontent.com/Grosser-Kurfuerst/oh-my-pi/build-
 PI_BUILD_URL=https://raw.githubusercontent.com/Grosser-Kurfuerst/oh-my-pi/build-index omp update
 ```
 
-如果 fork 构建的版本号不高于当前版本，需要加 `--force`。切换后，fork 版内置了索引地址，以后不需要再带 `PI_BUILD_URL`。
+如果 fork 构建的版本号不高于当前版本（例如两边都是 `18.12.5`），需要加 `--force`。切换后，fork 版内置了索引地址，以后不需要再带 `PI_BUILD_URL`。
 
-确认装的是 fork 的构建（版本号相同时，只看 `omp --version` 分辨不出官方版和 fork 版）：
+确认装的是 fork 的构建（`omp --version` 带 `-kf.N` 的一定是 fork 版；和上游版本号相同时分辨不出，要看 sha256）：
 
 ```bash
 sha256sum ~/.local/bin/omp
@@ -136,7 +155,7 @@ sha256sum ~/.local/bin/omp
 | 场景 | 操作 |
 |---|---|
 | 上游发了新版 | CI 自动合并、构建、发布；omp 启动时照常提示更新（设置项 `startup.checkUpdate`），执行 `omp update` |
-| 只改了 fork 自己的代码 | 版本号没变，omp 不会提示。等 Actions 运行完，执行 `omp update --force` |
+| 只改了 fork 自己的代码 | CI 发布 `-kf.N` 版本（§2.1），omp 照常提示，执行 `omp update` |
 | 查看是否有更新 | `omp update --check` |
 
 注意：
@@ -189,7 +208,7 @@ git remote add upstream https://github.com/can1357/oh-my-pi.git
 
 1. 开始改代码前先 `git pull`。CI 可能已经推过上游的合并提交。忘了也没关系：push 会因为落后远程被拒绝，`git pull` 之后再 push 即可。
 2. 改代码、提交、`git push`，CI 会自动构建发布。
-3. 等运行完成，执行 `omp update --force`。
+3. 等运行完成，执行 `omp update`。
 
 改造规则（代码放在 `src/fork/`、上游触点最小化、在 [README.md](README.md) 登记）见 [AGENTS.md](../../AGENTS.md) 的“Fork 改造”一节。
 
@@ -251,7 +270,9 @@ m=$(git log -1 --merges --grep='merge upstream' --format=%H origin/custom); git 
 | `Publish GitHub release` 失败，fork 没有 Release | 添加 `upstream` 远程后，`gh` 默认操作上游仓库 | 已在 job 环境变量加 `GH_REPO: ${{ github.repository }}`，所有 `gh` 命令都指向 fork |
 | checkout 失败或推送 403 | `FORK_SYNC_TOKEN` 过期或权限不足 | 重新生成 PAT（权限见 §3），更新 Secret |
 | 推送时提示需要 `workflow` 权限 | 上游改了 `.github/workflows/`，PAT 缺少 Workflows 权限 | 给 PAT 加上 Workflows: Read and write |
-| 安装 native 插件时下载 404 | 上游刚发布，npm 包还没上传；或者 `custom` 不在上游发布 tag 上 | 前一种不用管，下一次定时运行会自动重建，急的话手动运行；后一种确认 `custom` 是从上游 `vX.Y.Z` 合并来的 |
+| 安装 native 插件时下载 404 | 上游刚发布，npm 包还没上传；或者 `packages/natives/package.json` 的版本号被改过 | 前一种不用管，下一次定时运行会自动重建，急的话手动运行；后一种恢复成上游的版本号 |
+| `Resolve build id` 报 `No merge of vX.Y.Z found` | `custom` 不是通过合并上游 tag `vX.Y.Z` 同步的（比如合并了上游 `main`，或者用了 rebase） | 按 §7.1 合并上游 tag |
+| `Build binary` 报 `Binary reports ..., expected ...` | 二进制的版本和 fork 版本号不一致，通常是 `Stamp fork version` 被改坏，或者 `VERSION` 不再来自 `packages/utils/package.json` | 查看 `packages/utils/src/dirs.ts` 中 `VERSION` 的来源，相应调整 `Stamp fork version` |
 | Actions 里有上游的工作流一直排队或失败 | 上游新增了工作流文件，合并进来后默认启用 | 用 `gh workflow disable` 禁用，见 §3 |
 | 定时任务不再运行 | 公开仓库 60 天没有活动时，GitHub 会停用定时任务 | 在 Actions 页面重新启用。上游发版频繁，`build-index` 会经常有提交，一般不会出现 |
 | 构建报 native 版本戳不匹配 | fork 改了 `crates/` 或 `packages/natives`，npm 上的预编译插件对不上 | 需要在工作流里安装 Rust 工具链，用 `bun run build:native` 自行编译 |
@@ -287,7 +308,7 @@ m=$(git log -1 --merges --grep='merge upstream' --format=%H origin/custom); git 
 
 1. 本机先按 [§5.4](#54-回退到-fork-的上一个构建) 换回上一个构建。
 2. 在 `custom` 上修复，或者 `git revert` 出问题的提交，普通 `git push`。CI 会用新提交构建，覆盖 `latest`。
-3. 运行完成后，执行 `omp update --force`。
+3. 运行完成后，执行 `omp update`。新提交的版本号更高，会正常更新。
 
 不要用手改索引的方式回退（见 §8）。
 
@@ -298,13 +319,15 @@ m=$(git log -1 --merges --grep='merge upstream' --format=%H origin/custom); git 
 - 保留 job 环境变量里的 `GH_REPO`，否则 `gh` 会去操作上游仓库。
 - `set -o pipefail` 下不要用 `| head` 之类提前关闭管道的写法（见 §7.3）。
 - 改动 `BUILD_TARGET`、`BINARY_NAME` 前先对照 `resolveBuildHost`，名字对不上 omp 会拒绝安装。
+- 不要破坏 §2.1 的两个硬性约束。版本号计算可以在本地检出的 `custom` 上单独运行 `Resolve build id` 里的脚本来验证（去掉 `gh` 和 `GITHUB_OUTPUT` 两部分）。
 
 ## 8. 维护规则
 
 不要做：
 
 - **不要 force push `custom` 或 `build-index`。** 两个分支都只追加不改写，CI 和本地都依赖普通 push/pull。
-- **不要合并上游的 `main` 或 canary tag。** 只合并稳定版 tag `vX.Y.Z`，否则版本号和 npm 上的 native 插件对不上，构建失败。
+- **不要合并上游的 `main` 或 canary tag。** 只合并稳定版 tag `vX.Y.Z`，否则版本号和 npm 上的 native 插件对不上，fork 版本号也算不出来，构建失败。
+- **不要提交任何 `package.json` 的版本号改动。** fork 版本号只在构建机上生成（§2.1）；`packages/natives/package.json` 尤其不能改。
 - **不要手改 `build-index` 下 `api/` 里的 JSON。** `size`、`sha256` 对不上时 omp 会拒绝安装；手改的内容也会在下一次发布时被覆盖。README 等说明文件可以改。
 - **不要把本地的 `build-index` 分支直接 push。** 它通常落后远程，要改说明文件时，先 `git fetch origin build-index`，基于 `origin/build-index` 修改。
 - **不要改掉或丢掉 fork 的 `DEFAULT_BUILD_URL`**（合并冲突时尤其注意）。
