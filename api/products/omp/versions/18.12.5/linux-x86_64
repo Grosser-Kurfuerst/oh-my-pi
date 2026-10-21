@@ -1,0 +1,11 @@
+{
+  "build": {
+    "version": "18.12.5"
+  },
+  "file": {
+    "name": "omp-linux-x64",
+    "size": 256890848,
+    "sha256": "8885b72a580ef7c0cbaac79f5c05e5d39f361a7bc29d76e3432a4d29e8d73018"
+  },
+  "download": "https://github.com/Grosser-Kurfuerst/oh-my-pi/releases/download/kf-v18.12.5-9b12d84f/omp-linux-x64"
+}
