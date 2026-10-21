@@ -46,7 +46,7 @@ import {
 } from "./layout";
 import { nearestTurn, renderRail } from "./rail";
 import { type CellPoint, highlightRow, LINE_END, MouseSelection, rowSpan, selectedText } from "./selection";
-import { SessionSidebar, type SidebarDeps } from "./sidebar";
+import { SessionSidebar, type SidebarDeps, type SidebarSession } from "./sidebar";
 import { currentTurn, isUserTurnBlock, jumpOffset, promptLabel, type TurnEntry, turnTarget } from "./turn-index";
 
 /** The parts of InteractiveMode the shell reads; InteractiveMode satisfies it structurally. */
@@ -63,8 +63,10 @@ export interface WorkbenchShellOptions {
 	notify?(message: string): void;
 	/** Put text on the clipboard; without it a selection only highlights. */
 	copyToClipboard?(text: string): Promise<void>;
-	/** Sessions for the sidebar; without them there is no sidebar (startup prepaint). */
+	/** Sessions for the sidebar; without them there is no sidebar. */
 	sidebar?: SidebarDeps;
+	/** Shown until the sidebar's first reload (the startup cache); a rebind keeps the previous list instead. */
+	sidebarSessions?: readonly SidebarSession[];
 }
 
 const WHEEL_STEP = 3;
@@ -161,7 +163,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 				return !shell.#host.ui.inputDeferred;
 			},
 		};
-		this.#setSidebar(options.sidebar);
+		this.#setSidebar(options);
 	}
 
 	/**
@@ -174,7 +176,7 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 		this.#options = options;
 		this.#hostedFocus = undefined;
 		this.#hostedSlot = [];
-		this.#setSidebar(options.sidebar);
+		this.#setSidebar(options);
 		host.ui.requestRender();
 	}
 
@@ -800,23 +802,29 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 
 	// --- Sidebar -------------------------------------------------------------------
 
-	#setSidebar(deps: SidebarDeps | undefined): void {
+	#setSidebar({ sidebar: deps, sidebarSessions }: WorkbenchShellOptions): void {
 		this.#stopSidebarRefresh();
 		this.#sidebarFocused = false;
+		// Until the new deps reload, show what is already known rather than "loading".
+		const sessions = sidebarSessions ?? this.#sidebar?.sessions;
 		this.#sidebar = deps
-			? new SessionSidebar(deps, {
-					requestRender: () => this.#host.ui.requestRender(),
-					onSessionChanged: () => {
-						// The new transcript starts at its latest answer.
-						this.#sidebarFocused = false;
-						this.#pinToTail = true;
-						this.#host.ui.requestRender();
+			? new SessionSidebar(
+					deps,
+					{
+						requestRender: () => this.#host.ui.requestRender(),
+						onSessionChanged: () => {
+							// The new transcript starts at its latest answer.
+							this.#sidebarFocused = false;
+							this.#pinToTail = true;
+							this.#host.ui.requestRender();
+						},
+						onExit: () => {
+							this.#sidebarFocused = false;
+							this.#host.ui.requestRender();
+						},
 					},
-					onExit: () => {
-						this.#sidebarFocused = false;
-						this.#host.ui.requestRender();
-					},
-				})
+					sessions,
+				)
 			: undefined;
 		if (this.#handle) this.#startSidebarRefresh();
 	}

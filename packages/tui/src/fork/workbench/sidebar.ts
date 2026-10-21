@@ -87,9 +87,22 @@ export class SessionSidebar {
 	#armed: { readonly key: string; readonly until: number } | undefined;
 	#busy = false;
 
-	constructor(deps: SidebarDeps, events: SidebarEvents) {
+	/** `sessions`: a list already known, shown until the first reload. */
+	constructor(deps: SidebarDeps, events: SidebarEvents, sessions?: readonly SidebarSession[]) {
 		this.#deps = deps;
 		this.#events = events;
+		if (sessions) this.#setSessions(sessions);
+	}
+
+	/** The last loaded list, newest first; undefined before one loaded. */
+	get sessions(): readonly SidebarSession[] | undefined {
+		return this.#loaded ? this.#sessions : undefined;
+	}
+
+	#setSessions(sessions: readonly SidebarSession[]): void {
+		this.#sessions = sessions.toSorted((a, b) => b.modified.getTime() - a.modified.getTime());
+		this.#loaded = true;
+		this.#loadFailed = false;
 	}
 
 	/** Reload the list; a call while one runs queues one more run instead of overlapping it. */
@@ -106,10 +119,7 @@ export class SessionSidebar {
 		do {
 			this.#refreshQueued = false;
 			try {
-				const sessions = await this.#deps.listSessions();
-				this.#sessions = sessions.toSorted((a, b) => b.modified.getTime() - a.modified.getTime());
-				this.#loaded = true;
-				this.#loadFailed = false;
+				this.#setSessions(await this.#deps.listSessions());
 			} catch (err) {
 				this.#loadFailed = true;
 				logger.warn("Workbench failed to list sessions", { error: String(err) });

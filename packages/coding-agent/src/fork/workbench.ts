@@ -16,7 +16,12 @@ import { sessionDisplayName } from "../session/session-listing";
 import { SessionManager } from "../session/session-manager";
 import { copyToClipboard } from "../utils/clipboard";
 import { cfgWorkbenchEnabled, cfgWorkbenchStartsOpen } from "./workbench-settings";
-import { discardStartupWorkbench, rememberStartupOpen, takeStartupWorkbench } from "./workbench-startup";
+import {
+	discardStartupWorkbench,
+	rememberStartupOpen,
+	rememberStartupSessions,
+	takeStartupWorkbench,
+} from "./workbench-startup";
 
 /** The InteractiveMode surface the workbench needs. */
 export interface WorkbenchMode extends WorkbenchHost {
@@ -73,8 +78,11 @@ function sidebarDeps(mode: WorkbenchMode): SidebarDeps {
 	return {
 		async listSessions() {
 			const manager = mode.sessionManager;
-			const sessions = await SessionManager.listForPicker(manager.getCwd(), manager.getSessionDir());
-			return sessions.map(info => ({ ...info, displayName: sessionDisplayName(info) }));
+			const cwd = manager.getCwd();
+			const infos = await SessionManager.listForPicker(cwd, manager.getSessionDir());
+			const sessions = infos.map(info => ({ ...info, displayName: sessionDisplayName(info) }));
+			rememberStartupSessions(cwd, sessions);
+			return sessions;
 		},
 		projectName: () => path.basename(mode.sessionManager.getCwd()),
 		currentPath: () => mode.sessionManager.getSessionFile(),

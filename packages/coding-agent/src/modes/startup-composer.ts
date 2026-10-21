@@ -86,7 +86,7 @@ export function beginStartupComposer(options: PrepaintComposerOptions = {}): voi
 		status: cached.status,
 	});
 	// Fork: open before the first frame so it is already the fullscreen workbench.
-	openStartupWorkbench(composer);
+	openStartupWorkbench(composer, cwd);
 	try {
 		composer.start({ clearScrollback: true, deferInput: true });
 	} catch (error) {

@@ -92,7 +92,7 @@ packages/tui/src/fork/
 
 packages/coding-agent/src/fork/
 ├── workbench.ts              # installWorkbench(mode)：组装 deps、会话列表、切换、读取设置
-├── workbench-startup.ts      # openStartupWorkbench / takeStartupWorkbench：预绘制时打开外壳，安装时交接；启动缓存 workbench.json
+├── workbench-startup.ts      # openStartupWorkbench / takeStartupWorkbench：预绘制时打开外壳，安装时交接；启动缓存 workbench.json、workbench-sessions/
 └── workbench-settings.ts     # register() 定义 fork.workbench.* 设置
 ```
 
@@ -104,7 +104,7 @@ packages/coding-agent/src/fork/
 | ② | [app-keybindings.ts:89](../../packages/tui/src/app-keybindings.ts:89)（8） | 在 `...TUI_KEYBINDINGS,` 之后加 `...FORK_KEYBINDINGS,`，另加 1 行 import | ✅ | M1 |
 | ③ | [all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts)（6） | 1 行 import，`DOMAINS` 末尾加 1 项（带 `Fork:` 注释） | ✅ | M5 |
 | ④ | [tui.ts:3847](../../packages/tui/src/tui.ts:3847)（68） | `wantAlt` 改为"栈中任一可见覆盖层是 fullscreen" | 可选 | M1 视验证结果决定 |
-| ⑤ | [startup-composer.ts:89](../../packages/coding-agent/src/modes/startup-composer.ts:89)（5） | 在 `beginStartupComposer` 的 `composer.start(...)` 之前加 `openStartupWorkbench(composer);`，另加 1 行 import | ✅ | M3 之后 |
+| ⑤ | [startup-composer.ts:89](../../packages/coding-agent/src/modes/startup-composer.ts:89)（5） | 在 `beginStartupComposer` 的 `composer.start(...)` 之前加 `openStartupWorkbench(composer, cwd);`，另加 1 行 import | ✅ | M3 之后 |
 | ⑥ | [tui.ts:1164](../../packages/tui/src/tui.ts:1164)（67） | 新增只读 getter `inputDeferred`，暴露私有 `#inputDeferred`；纯新增，不改已有行 | ✅ | M3 之后 |
 | ⑦ | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts)（5） | `hotkeyGroups` 返回前 `groups.push(forkHotkeyGroup(...))`，另加 1 行 import | ✅ | M5 |
 
@@ -587,7 +587,7 @@ M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Dis
   - 焦点：侧边栏聚焦时 TUI 的焦点仍在编辑器上，外壳的输入监听器先把按键交给侧边栏。侧边栏认识的键（方向、回车、`Esc`、`/`、`n`、可打印字符）不会落到编辑器；`ctrl+t` 这类组合键照常生效。单击侧边栏以外的任何区域、`Esc`、切换或新建会话后，键盘都回到编辑器。
   - 主列不足 40 列时不显示侧边栏，即使手动展开。
 - **已知限制**：
-  - 预绘制阶段还没有会话，外壳不画侧边栏；接管后侧边栏出现，主列右移一次。
+  - ~~预绘制阶段还没有会话，外壳不画侧边栏；接管后侧边栏出现，主列右移一次。~~ 已在 M5 之后解决，见下方"预绘制侧边栏"。
   - 侧边栏聚焦时硬件光标仍停在编辑器里。
   - 只有当前会话可能在运行，其他会话没有运行状态。
 
@@ -621,6 +621,7 @@ M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Dis
 - **`/hotkeys`**：新触点 ⑦。分组内容在 `tui/src/fork/hotkeys.ts`：四个工作台快捷键取实际绑定，另有侧边栏按键（`/`、`n`、回车、Esc）和鼠标操作两行说明。
 - **依赖清单**：写在 `tui/src/fork/workbench/index.ts` 顶部，只列 API 名称，位置见 §11。
 - **CHANGELOG**：不写。上游几乎每个提交和每次发版都改 `[Unreleased]`，fork 条目每次同步都会冲突；fork 的构建也不走上游发版流程，改动记录在 `docs/fork/README.md`。
+- **预绘制侧边栏**（M5 之后）：原来侧边栏要等接管（约 1 秒）才出现。现在侧边栏每次加载列表后，把最新 100 个会话（路径、显示名、标题、修改时间）写到缓存目录的 `workbench-sessions/<cwd 哈希>.json`，内容不变不写。预绘制按 cwd 同步读取（触点 ⑤ 多传了 `cwd`），和全屏同一帧画出侧边栏；没有缓存时先画项目名和"加载中…"，布局同样不跳。预绘制时还不知道会打开哪个会话，按新会话处理，顶部显示"新会话"；`omp -c`、`--resume` 启动时这一行在接管后消失。接管时 `rebind` 沿用已显示的列表，直到真实列表加载完，不会闪"加载中…"。预绘制期间的点击和 `n` 不起作用。实测第二次启动侧边栏和全屏同在约 250ms 出现。
 
 ---
 
@@ -673,7 +674,7 @@ M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Dis
 | `KEYBINDINGS` / `Keybindings` 接口 | [app-keybindings.ts:89](../../packages/tui/src/app-keybindings.ts:89) | 快捷键注册 |
 | `hotkeyGroups` | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts) | `/hotkeys` 的 Workbench 分组（触点 ⑦） |
 | `register` / `combine` / `listen` / `DOMAINS` | [registry.ts](../../packages/coding-agent/src/config/registry.ts)、[all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts) | 设置项（触点 ③）；`listen` 在会话中改设置时回写启动缓存 |
-| `getComposerCacheDbPath` | [dirs.ts](../../packages/utils/src/dirs.ts) | 启动缓存 `workbench.json` 放在同一目录 |
+| `getComposerCacheDbPath` | [dirs.ts](../../packages/utils/src/dirs.ts) | 启动缓存 `workbench.json`、`workbench-sessions/` 放在同一目录 |
 | `SessionManager.listForPicker` / `sessionDisplayName` | [session-listing.ts](../../packages/coding-agent/src/session/session-listing.ts) | 会话列表 |
 | `rankSessionSearchMatches` / `SessionSelectorEntry` | [session-selector.ts](../../packages/tui/src/overlays/session-selector.ts) | 侧边栏过滤 |
 | `SessionManager.onSessionNameChanged` | [session-manager.ts](../../packages/coding-agent/src/session/session-manager.ts) | 改名后刷新列表 |

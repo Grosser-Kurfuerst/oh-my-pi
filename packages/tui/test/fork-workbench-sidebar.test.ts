@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import { WorkbenchShell } from "@oh-my-pi/pi-tui/fork/workbench/shell";
+import { WorkbenchShell, type WorkbenchShellOptions } from "@oh-my-pi/pi-tui/fork/workbench/shell";
 import {
 	ABORT_CONFIRM_MS,
 	SessionSidebar,
@@ -206,7 +206,10 @@ function mouseClick(col: number, row: number): string[] {
 }
 
 describe("workbench shell sidebar", () => {
-	function harness(columns: number) {
+	function harness(
+		columns: number,
+		options: (deps: SidebarDeps) => WorkbenchShellOptions = deps => ({ sidebar: deps }),
+	) {
 		useAppKeybindings();
 		const terminal = new VirtualTerminal(columns, 12);
 		const scheduler = new VirtualRenderScheduler();
@@ -230,10 +233,8 @@ describe("workbench shell sidebar", () => {
 			listed++;
 			return listSessions();
 		};
-		const shell = new WorkbenchShell(
-			{ ui: composer.ui, chatContainer: transcript, editorContainer },
-			{ sidebar: fake.deps },
-		);
+		const host = { ui: composer.ui, chatContainer: transcript, editorContainer };
+		const shell = new WorkbenchShell(host, options(fake.deps));
 		const uninstall = shell.install();
 		shell.open();
 		cleanups.push(() => {
@@ -251,7 +252,18 @@ describe("workbench shell sidebar", () => {
 			await settle();
 		};
 		const screen = () => plain(terminal.getViewport());
-		return { terminal, editor, shell, state: fake.state, listed: () => listed, settle, press, screen };
+		return {
+			terminal,
+			editor,
+			host,
+			shell,
+			deps: fake.deps,
+			state: fake.state,
+			listed: () => listed,
+			settle,
+			press,
+			screen,
+		};
 	}
 
 	it("shows the session list beside the transcript on wide terminals and switches on click", async () => {
@@ -266,6 +278,22 @@ describe("workbench shell sidebar", () => {
 		for (const report of mouseClick(4, secondRow)) await h.press(report);
 		expect(h.state.calls).toEqual(["switch /sessions/second.jsonl"]);
 		expect(h.screen()[3]).toMatch(/^● second/);
+	});
+
+	it("shows a known list before any load resolves and keeps it while a rebind reloads", async () => {
+		const loading = () => Promise.withResolvers<SidebarSession[]>().promise;
+		const h = harness(120, deps => ({
+			sidebar: { ...deps, listSessions: loading },
+			sidebarSessions: [session("cached", 3)],
+		}));
+		await h.settle();
+		expect(h.screen().some(row => row.includes("cached"))).toBe(true);
+
+		h.shell.rebind(h.host, { sidebar: { ...h.deps, listSessions: loading } });
+		await h.settle();
+		const screen = h.screen();
+		expect(screen.some(row => row.includes("cached"))).toBe(true);
+		expect(screen.some(row => row.includes("加载中"))).toBe(false);
 	});
 
 	it("starts collapsed below 100 columns without listing sessions; the sidebar key opens it with the keys", async () => {
