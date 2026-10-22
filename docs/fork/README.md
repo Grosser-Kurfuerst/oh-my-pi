@@ -97,10 +97,10 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 
 以下上游行为没有文本冲突，但上游一改，外壳就可能出错。完整清单见 [workbench-plan.md §11](workbench-plan.md)，最容易出问题的是：
 
-- **渲染树结构**：外壳根据 `ui.children` 里 `chatContainer` 的位置，拆分内容区和底部固定区（`Composer.setRuntimeChildren`）。上游调整根节点顺序会让布局错乱。
+- **渲染树结构**：外壳只读 `ui.children`，不改动它：用 `instanceof TranscriptContainer` 找到对话区，之前的根节点并入内容区，之后的固定在底部。根节点由 InteractiveMode 的 `setRuntimeChildren` 挂载，上游调整顺序或给对话区再包一层，布局就会错乱。
 - **覆盖层与 alt screen**：TUI 只看最顶层覆盖层是否 `fullscreen`，并且每帧重读它的 `mouseTracking`。外壳打开期间清屏会被推迟到退出 alt screen 时执行。
 - **输入路由**：外壳的输入监听器排在上游监听器之前；上游的 `ctrl+o`、`ctrl+t` 等在有覆盖层时让出按键，由外壳代为执行。上游改变这种让出行为，这些按键可能失效或被执行两次。
-- **对话组件**：`TranscriptContainer` 的 `beginFrame` / `getChildStartRow`、`UserMessageComponent`（轮次识别）、`stripPromptZones`。
+- **对话组件**：`TranscriptContainer` 的 `blockStates`、对话块的 `setTranscriptAllocation`、`UserMessageComponent` 等提问组件（轮次识别）、`stripPromptZones`。
 - **启动预绘制**：`beginStartupComposer` 的 `deferInput` 启动、`enableInput()` 的调用时机、`ComposerLease.adopt()`。
 - **会话侧边栏**：`SessionManager.listForPicker`、`sessionDisplayName`、`rankSessionSearchMatches`，以及 InteractiveMode 的 `handleResumeSession`、`handleNewCommand`、`session.isStreaming`。签名变化 `bun run check` 能发现；行为变化（例如切换时不再中止当前回合）发现不了。
 

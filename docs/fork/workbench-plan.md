@@ -662,10 +662,10 @@ M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Dis
 | `ui.showOverlay` / `OverlayOptions.fullscreen` | [tui.ts](../../packages/tui/src/tui.ts) | 外壳本体 |
 | `OverlayFocusOwner.ownsOverlayFocusTarget` | [tui.ts:356](../../packages/tui/src/tui.ts:356) | 焦点委托 |
 | `ui.addInputListener` | [tui.ts:2443](../../packages/tui/src/tui.ts:2443) | 键盘、鼠标拦截 |
-| `ui.children` 中 chatContainer 的位置 | [composer.ts](../../packages/tui/src/prompt/composer.ts) `setRuntimeChildren` | 内容区与底部区的拆分 |
+| `ui.children` 的根节点顺序（只读，用 `instanceof TranscriptContainer` 找对话区） | [interactive-mode.ts](../../packages/coding-agent/src/modes/interactive-mode.ts) 调用 `setRuntimeChildren` 处 | 内容区与底部区的拆分 |
 | `beginStartupComposer` / `Composer.ui` / `Composer.editor` | [startup-composer.ts](../../packages/coding-agent/src/modes/startup-composer.ts)、[composer.ts](../../packages/tui/src/prompt/composer.ts) | 预绘制时打开外壳 |
 | `OverlayOptions.mouseTracking`（每帧重读）/ `TUI.inputDeferred`（触点 ⑥） | [tui.ts](../../packages/tui/src/tui.ts) | cooked 输入期间关闭鼠标上报 |
-| `TranscriptContainer.beginFrame` / `getChildStartRow` | [transcript-container.ts](../../packages/tui/src/chrome/transcript-container.ts) | 动画、轮次定位 |
+| `TranscriptContainer.blockStates` / `setTranscriptAllocation` / `trimBlankEdges` | [transcript-container.ts](../../packages/tui/src/chrome/transcript-container.ts) | 逐块渲染、动画、释放缓存 |
 | `UserMessageComponent` | [user-message.ts:128](../../packages/tui/src/chat/user-message.ts:128) | 轮次识别 |
 | `stripPromptZones` | [transcript-outline.ts:57](../../packages/tui/src/chat/transcript-outline.ts:57) | 清理 OSC 133 |
 | `ScrollView` | [scroll-view.ts](../../packages/tui/src/components/scroll-view.ts) | 内容区滚动 |

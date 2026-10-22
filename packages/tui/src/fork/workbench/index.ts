@@ -6,11 +6,14 @@
  * - tui.ts: `showOverlay` / `OverlayOptions.fullscreen` and `mouseTracking`
  *   (re-read every frame), `OverlayFocusOwner.ownsOverlayFocusTarget`,
  *   `addInputListener`, `inputDeferred`
- * - prompt/composer.ts: chatContainer's place in `ui.children`
- *   (`setRuntimeChildren`), `Composer.ui` / `Composer.editor`
- * - chrome/transcript-container.ts: `beginFrame`, `getChildStartRow`
- * - chat/user-message.ts `UserMessageComponent` (turns),
- *   chat/transcript-outline.ts `stripPromptZones`
+ * - root order in `ui.children` (read only, never rearranged): the transcript
+ *   root, found by `instanceof TranscriptContainer`, with the HUDs, editor and
+ *   status line after it (as InteractiveMode mounts them)
+ * - prompt/composer.ts: `Composer.ui` / `Composer.editor` (startup prepaint)
+ * - chrome/transcript-container.ts: `blockStates`, `trimBlankEdges`,
+ *   `TranscriptPresentationTarget.setTranscriptAllocation` / `AnimationFrame`
+ * - chat/user-message.ts `UserMessageComponent`, skill-message.ts,
+ *   collab-prompt-message.ts (turns), chat/transcript-outline.ts `stripPromptZones`
  * - components/scroll-view.ts `ScrollView`, mouse.ts `routeSgrMouseInput`,
  *   utils.ts `sliceByColumn`
  * - app-keybindings.ts `KEYBINDINGS` / `Keybindings`, hotkeys-markdown.ts `hotkeyGroups`
