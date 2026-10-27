@@ -22,6 +22,8 @@ env:
   UPSTREAM_URL: https://github.com/can1357/oh-my-pi.git
   BUILD_TARGET: linux-x86_64   # build-service.ts resolveBuildHost 的 target
   BINARY_NAME: omp-linux-x64   # resolveBuildHost 的 fileName
+  # 预编译 natives 插件在 npm 上的地址前缀，后面接 -<版本>.tgz
+  NATIVES_TARBALL: https://registry.npmjs.org/@oh-my-pi/pi-natives-linux-x64/-/pi-natives-linux-x64
 
 jobs:
   sync-and-release:
@@ -43,7 +45,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      # 只跟上游稳定版 tag（排除 v*-canary.*），保证版本号与 npm 上的 natives 对得上
+      # 只跟上游已发到 npm 的稳定版 tag（排除 v*-canary.*），保证版本号与 npm 上的 natives 对得上
       # 用 merge 而非 rebase：custom 只追加不改写，CI 普通 push，本地普通 pull 即可
       - name: Merge latest upstream release
         run: |
@@ -55,6 +57,12 @@ jobs:
           latest=$(git tag -l 'v[0-9]*' --sort=-v:refname | awk '!/-/ && !found { print; found = 1 }')
           if git merge-base --is-ancestor "$latest" HEAD; then
             echo "custom already contains $latest"
+            exit 0
+          fi
+          # 上游先推 tag，CI 测试全过才发 npm，测试失败时 tag 会一直没有对应的 natives。
+          # 这时先不合并，照常构建当前的 custom，等下次运行再试
+          if ! curl -fsIL --retry 3 -o /dev/null "${NATIVES_TARBALL}-${latest#v}.tgz"; then
+            echo "::notice::$latest is tagged but its natives are not on npm yet; skipping the merge."
             exit 0
           fi
           if ! git merge --no-ff --no-edit -m "chore(fork): merge upstream $latest" "$latest"; then
@@ -115,7 +123,7 @@ jobs:
           BASE_VERSION: ${{ steps.meta.outputs.base }}
         run: |
           set -euo pipefail
-          curl -fsSL --retry 3 "https://registry.npmjs.org/@oh-my-pi/pi-natives-linux-x64/-/pi-natives-linux-x64-${BASE_VERSION}.tgz" \
+          curl -fsSL --retry 3 "${NATIVES_TARBALL}-${BASE_VERSION}.tgz" \
             | tar -xz -C "$RUNNER_TEMP"
           cp "$RUNNER_TEMP"/package/pi_natives.linux-x64-{baseline,modern}.node packages/natives/native/
 

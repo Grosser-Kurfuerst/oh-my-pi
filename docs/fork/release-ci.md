@@ -18,7 +18,7 @@ can1357/oh-my-pi ──(定时拉取 v* 稳定版 tag)──▶ Grosser-Kurfuers
 - 构建服务客户端：[build-service.ts](../../packages/coding-agent/src/cli/build-service.ts)。`DEFAULT_BUILD_URL` 已改为 fork 的索引地址（上游触点见 [README.md §3](README.md)），环境变量 `PI_BUILD_URL` 仍可覆盖。
 - 索引分支：`build-index`，孤儿分支，只有 `README.md` 和 `api/` 下的 JSON，不含源码。
 
-只跟上游**稳定版发布 tag**（`vX.Y.Z`，不含 `-canary.*`），不跟上游 `main`，原因是：
+只跟上游**已发到 npm 的稳定版发布 tag**（`vX.Y.Z`，不含 `-canary.*`），不跟上游 `main`，原因是：
 
 - 版本号与 npm 上的预编译 native 插件一一对应，CI 不用编译 Rust；
 - 发布版比 `main` 稳定。
@@ -35,7 +35,7 @@ can1357/oh-my-pi ──(定时拉取 v* 稳定版 tag)──▶ Grosser-Kurfuers
 
 | 步骤 | 内容 |
 |---|---|
-| Merge latest upstream release | 拉取上游 `v*` tag，取最新的稳定版。`custom` 已包含它就跳过；否则 `git merge --no-ff`，提交信息为 `chore(fork): merge upstream vX.Y.Z`，再普通 push 回 `custom`。冲突时撤销合并，并以 `::error::` 失败 |
+| Merge latest upstream release | 拉取上游 `v*` tag，取最新的稳定版。`custom` 已包含它就跳过；npm 上还没有这个版本的 `pi-natives-linux-x64` 也跳过（输出 `::notice::`，照常构建当前的 `custom`）；否则 `git merge --no-ff`，提交信息为 `chore(fork): merge upstream vX.Y.Z`，再普通 push 回 `custom`。冲突时撤销合并，并以 `::error::` 失败 |
 | Resolve build id | 按 §2.1 算出 fork 版本号，release tag 为 `kf-v<fork 版本>-<commit 前 8 位>`。这个 tag 已有 Release 时，后续步骤全部跳过 |
 | 安装依赖、native 插件 | `bun install --frozen-lockfile`；按**上游版本号**从 npm 下载 `@oh-my-pi/pi-natives-linux-x64`，把 `baseline`、`modern` 两个 `.node` 放进 `packages/natives/native/` |
 | Stamp fork version | 只在构建机上把 `packages/utils/package.json` 的 `version` 改成 fork 版本号，不提交 |
@@ -232,7 +232,7 @@ git fetch upstream --tags
 git merge --no-ff -m "chore(fork): merge upstream vX.Y.Z" vX.Y.Z
 ```
 
-提交信息和 CI 自动合并时保持一致。解决冲突时：
+提交信息和 CI 自动合并时保持一致。合并前先确认 npm 上已有 `@oh-my-pi/pi-natives-linux-x64` 的 `X.Y.Z` 版本，否则构建会在下载 native 插件时 404。解决冲突时：
 
 - 按 [README.md §3](README.md) 处理上游触点的冲突。`build-service.ts` 冲突时**必须保留 fork 的 `DEFAULT_BUILD_URL`**，否则 `omp update` 会装回官方版。
 - `bun.lock` 冲突时取上游的版本（`git checkout --theirs bun.lock`），再执行 `bun install` 确认没有变化。fork 没有加依赖，正常不会冲突。
@@ -270,7 +270,8 @@ m=$(git log -1 --merges --grep='merge upstream' --format=%H origin/custom); git 
 | `Publish GitHub release` 失败，fork 没有 Release | 添加 `upstream` 远程后，`gh` 默认操作上游仓库 | 已在 job 环境变量加 `GH_REPO: ${{ github.repository }}`，所有 `gh` 命令都指向 fork |
 | checkout 失败或推送 403 | `FORK_SYNC_TOKEN` 过期或权限不足 | 重新生成 PAT（权限见 §3），更新 Secret |
 | 推送时提示需要 `workflow` 权限 | 上游改了 `.github/workflows/`，PAT 缺少 Workflows 权限 | 给 PAT 加上 Workflows: Read and write |
-| 安装 native 插件时下载 404 | 上游刚发布，npm 包还没上传；或者 `packages/natives/package.json` 的版本号被改过 | 前一种不用管，下一次定时运行会自动重建，急的话手动运行；后一种恢复成上游的版本号 |
+| 同步步骤出现 `vX.Y.Z is tagged but its natives are not on npm yet` | 上游先推 tag，CI 测试全部通过后才发 npm；测试失败或还在跑时，npm 上没有这个版本 | 不用管，这次运行照常构建当前的 `custom`。上游发到 npm 后，下一次运行会合并；上游放弃这个版本、直接发下一个，也会自动跟上 |
+| 安装 native 插件时下载 404 | `packages/natives/package.json` 的版本号被改过；或者手动合并了一个还没发到 npm 的上游 tag | 前一种恢复成上游的版本号；后一种等上游发到 npm 后重新运行。不要 revert 合并提交，以后再合并同一版本会出问题 |
 | `Resolve build id` 报 `No merge of vX.Y.Z found` | `custom` 不是通过合并上游 tag `vX.Y.Z` 同步的（比如合并了上游 `main`，或者用了 rebase） | 按 §7.1 合并上游 tag |
 | `Build binary` 报 `Binary reports ..., expected ...` | 二进制的版本和 fork 版本号不一致，通常是 `Stamp fork version` 被改坏，或者 `VERSION` 不再来自 `packages/utils/package.json` | 查看 `packages/utils/src/dirs.ts` 中 `VERSION` 的来源，相应调整 `Stamp fork version` |
 | Actions 里有上游的工作流一直排队或失败 | 上游新增了工作流文件，合并进来后默认启用 | 用 `gh workflow disable` 禁用，见 §3 |
