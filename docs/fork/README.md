@@ -103,7 +103,7 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 - **输入路由**：外壳的输入监听器排在上游监听器之前；上游的 `ctrl+o`、`ctrl+t` 等在有覆盖层时让出按键，由外壳代为执行。上游改变这种让出行为，这些按键可能失效或被执行两次。
 - **对话组件**：`TranscriptContainer` 的 `blockStates`、对话块的 `setTranscriptAllocation`、`UserMessageComponent` 等提问组件（轮次识别）、`stripPromptZones`。
 - **启动预绘制**：`beginStartupComposer` 的 `deferInput` 启动、`enableInput()` 的调用时机、`ComposerLease.adopt()`。
-- **会话侧边栏**：`SessionManager.listForPicker`、`sessionDisplayName`、`rankSessionSearchMatches`，以及 InteractiveMode 的 `handleResumeSession`、`handleNewCommand`、`session.isStreaming`。签名变化 `bun run check` 能发现；行为变化（例如切换时不再中止当前回合）发现不了。
+- **会话侧边栏**：`SessionManager.listForPicker`（侧边栏取它的 `complete`，即完整扫描；首批 `sessions` 只含已索引标题的会话。v18.16.0 曾把返回值从数组改成这个结构）、`sessionDisplayName`、`rankSessionSearchMatches`，以及 InteractiveMode 的 `handleResumeSession`、`handleNewCommand`、`session.isStreaming`。签名变化 `bun run check` 能发现；行为变化（例如切换时不再中止当前回合）发现不了。
 
 ## 5. 与上游的行为差异
 

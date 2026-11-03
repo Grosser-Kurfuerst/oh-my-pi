@@ -319,10 +319,11 @@ describe("workbench settings", () => {
 
 describe("workbench session sidebar", () => {
 	it("lists the project's sessions, reloads them on a rename and shows a failed switch", async () => {
-		const listed = spyOn(SessionManager, "listForPicker").mockResolvedValue([
-			sessionInfo("current", 1),
-			sessionInfo("broken", 2),
-		]);
+		// The first pass holds only the indexed titles; the sidebar shows the full scan.
+		const listed = spyOn(SessionManager, "listForPicker").mockResolvedValue({
+			sessions: [sessionInfo("current", 1)],
+			complete: Promise.resolve([sessionInfo("current", 1), sessionInfo("broken", 2)]),
+		});
 		const h = harness(120, mode => {
 			mode.handleResumeSession = async () => {
 				throw new Error("session file is corrupt");

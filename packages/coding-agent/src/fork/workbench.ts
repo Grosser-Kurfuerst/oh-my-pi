@@ -79,8 +79,9 @@ function sidebarDeps(mode: WorkbenchMode): SidebarDeps {
 		async listSessions() {
 			const manager = mode.sessionManager;
 			const cwd = manager.getCwd();
-			const infos = await SessionManager.listForPicker(cwd, manager.getSessionDir());
-			const sessions = infos.map(info => ({ ...info, displayName: sessionDisplayName(info) }));
+			// The full scan: the listing's first pass holds only the sessions with an indexed title.
+			const listing = await SessionManager.listForPicker(cwd, manager.getSessionDir());
+			const sessions = (await listing.complete).map(info => ({ ...info, displayName: sessionDisplayName(info) }));
 			rememberStartupSessions(cwd, sessions);
 			return sessions;
 		},
