@@ -13,6 +13,7 @@ import {
 	CURSOR_MARKER,
 	type Focusable,
 	getKeybindings,
+	type OverlayFocusOwner,
 	setKeybindings,
 } from "@oh-my-pi/pi-tui";
 import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
@@ -47,6 +48,21 @@ class Popup implements Component {
 
 	render(): string[] {
 		return [this.text];
+	}
+}
+
+/** Fullscreen sheet that hands its keys to a part of its own, like the setup wizard's login dialog. */
+class Sheet implements Component, OverlayFocusOwner {
+	readonly part = new CursorEditor();
+
+	handleInput(): void {}
+
+	ownsOverlayFocusTarget(component: Component): boolean {
+		return component === this.part;
+	}
+
+	render(): string[] {
+		return ["sheet"];
 	}
 }
 
@@ -180,6 +196,29 @@ describe("workbench shell", () => {
 		await h.settle();
 		expect(h.editor.typed).toBe("x");
 		expect(h.composer.ui.getFocused()).toBe(h.editor);
+	});
+
+	it("does not hand keys to a closed part of a fullscreen overlay that sat above it", async () => {
+		const h = harness();
+		await h.settle();
+		h.shell.open();
+		await h.settle();
+
+		const ui = h.composer.ui;
+		const sheet = new Sheet();
+		const handle = ui.showOverlay(sheet, { fullscreen: true });
+		ui.setFocus(sheet.part);
+		// The shell keeps painting under a fullscreen overlay while the part holds the keys.
+		await h.settle();
+		// Closed the way the setup wizard closes: the part gives the keys back, then the sheet goes.
+		ui.setFocus(sheet);
+		handle.hide();
+		await h.settle();
+
+		h.terminal.sendInput("x");
+		await h.settle();
+		expect(h.editor.typed).toBe("x");
+		expect(sheet.part.typed).toBe("");
 	});
 
 	it("steps aside for an inline popup and returns once it closes", async () => {

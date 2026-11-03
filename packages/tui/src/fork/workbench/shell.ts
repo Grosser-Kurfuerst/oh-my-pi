@@ -301,6 +301,8 @@ export class WorkbenchShell implements Component, Focusable, OverlayFocusOwner {
 	}
 
 	#recordHostedFocus(): void {
+		// Under another overlay (the setup wizard) the focus belongs to that overlay's parts.
+		if (!this.isFrontmost) return;
 		const focused = this.#host.ui.getFocused();
 		if (!focused || !this.ownsOverlayFocusTarget(focused)) return;
 		this.#hostedFocus = focused;

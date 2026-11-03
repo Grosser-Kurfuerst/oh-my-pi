@@ -99,6 +99,7 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 
 - **渲染树结构**：外壳只读 `ui.children`，不改动它：用 `instanceof TranscriptContainer` 找到对话区，之前的根节点并入内容区，之后的固定在底部。根节点由 InteractiveMode 的 `setRuntimeChildren` 挂载，上游调整顺序或给对话区再包一层，布局就会错乱。
 - **覆盖层与 alt screen**：TUI 只看最顶层覆盖层是否 `fullscreen`，并且每帧重读它的 `mouseTracking`。外壳打开期间清屏会被推迟到退出 alt screen 时执行。
+- **焦点归还**：上层覆盖层关闭后，焦点先回到外壳，外壳再转交给编辑器区里它记下的组件。外壳只在自己位于最上层时记录，否则会记下上层覆盖层的内部组件（例如 `/providers` 向导里的登录框），关闭后按键全被它吞掉，连 `ctrl+c` 都失效。外壳靠 `ui.overlayStack`、`setFocus` 的持键覆盖层转发和 `OverlayFocusOwner` 判断归属，上游改动这些时要重新确认。
 - **输入路由**：外壳的输入监听器排在上游监听器之前；上游的 `ctrl+o`、`ctrl+t` 等在有覆盖层时让出按键，由外壳代为执行。上游改变这种让出行为，这些按键可能失效或被执行两次。
 - **对话组件**：`TranscriptContainer` 的 `blockStates`、对话块的 `setTranscriptAllocation`、`UserMessageComponent` 等提问组件（轮次识别）、`stripPromptZones`。
 - **启动预绘制**：`beginStartupComposer` 的 `deferInput` 启动、`enableInput()` 的调用时机、`ComposerLease.adopt()`。
