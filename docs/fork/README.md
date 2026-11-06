@@ -119,7 +119,7 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 ## 6. 同步上游检查清单
 
 1. CI 自动合并上游的稳定版 tag。合并冲突时在本地合并，按第 3 节处理触点冲突（流程见 [release-ci.md §7.1](release-ci.md)）。
-2. 在 `packages/tui` 和 `packages/coding-agent` 下分别运行 `bun run check`。
+2. 按 [release-ci.md §6.2](release-ci.md) 换上新版本的 native 插件（否则第 3 步的测试会报插件版本不符），然后在 `packages/tui` 和 `packages/coding-agent` 下分别运行 `bun run check`。
 3. 运行 fork 相关测试：
    - `packages/tui`：`bun test test/fork-workbench`
    - `packages/coding-agent`：`bun test test/fork-workbench.test.ts test/issue-9597-cold-launch-double-clear.test.ts test/startup-composer test/cli/build-service.test.ts`

@@ -161,7 +161,10 @@ sha256sum ~/.local/bin/omp
 注意：
 
 - 不要切换到 canary 渠道（`omp update --canary`）。fork 只发布稳定版，索引不区分渠道。
-- raw.githubusercontent 大约有 5 分钟缓存，刚发布的构建可能要过几分钟才能检测到。
+- raw.githubusercontent 大约有 5 分钟缓存，刚发布的构建可能要过几分钟才能检测到。不同 CDN 节点的缓存各自过期，所以可能出现 curl 已经拿到新版本、`omp update --check` 还显示 `Already up to date` 的情况，等几分钟再试即可。要确认索引本身是否已经更新，按提交读取（绕过缓存）：
+  ```bash
+  git fetch origin build-index && curl -s "https://raw.githubusercontent.com/Grosser-Kurfuerst/oh-my-pi/$(git rev-parse origin/build-index)/api/products/omp/latest/linux-x86_64"
+  ```
 - 每次更新都下载约 250MB 的完整文件，因为没有官方的增量补丁。
 - 已经在运行的 omp 进程仍然是旧版本，需要重启。
 - 从源码目录运行的 omp 不会提示更新。
@@ -198,13 +201,37 @@ chmod +x ~/.local/bin/omp.new && mv ~/.local/bin/omp.new ~/.local/bin/omp
 
 ## 6. 本地开发流程
 
-需要：仓库写权限；本地装好 bun（运行检查和测试）；可选装好 `gh` 并登录（看 CI 日志）。
+需要：仓库写权限；bun，版本不低于根目录 `package.json` 的 `packageManager`（目前是 `bun@>=1.4.4`，上游会提高，太旧时测试报 `Bun runtime must be >= ...`，执行 `bun upgrade`）；可选装好 `gh` 并登录（看 CI 日志，没有也行，见 §7.2）。
 
-本地需要先添加上游远程（只做一次）：
+### 6.1 新开发环境初始化（只做一次）
 
 ```bash
-git remote add upstream https://github.com/can1357/oh-my-pi.git
+git clone git@github.com:Grosser-Kurfuerst/oh-my-pi.git && cd oh-my-pi
 ```
+
+默认分支就是 `custom`。添加上游远程，并让 git 记住冲突的解决方式：
+
+```bash
+git remote add upstream https://github.com/can1357/oh-my-pi.git && git config rerere.enabled true
+```
+
+```bash
+bun install
+```
+
+然后按 §6.2 装 native 插件。
+
+### 6.2 本地的 native 插件
+
+从源码运行或测试需要 `packages/natives/native/` 下的 `.node` 插件，而且版本必须等于 `packages/natives/package.json` 的版本，否则报 `... is the @oh-my-pi/pi-natives@<旧版本> addon, not @<新版本>`。不用自己编译 Rust，和 CI 一样从 npm 下载（新环境初始化时、以及每次合并上游后都要做一次）：
+
+```bash
+v=$(jq -r .version packages/natives/package.json) && d=$(mktemp -d) && curl -fsSL "https://registry.npmjs.org/@oh-my-pi/pi-natives-linux-x64/-/pi-natives-linux-x64-$v.tgz" | tar -xz -C "$d" && cp "$d"/package/pi_natives.linux-x64-{baseline,modern}.node packages/natives/native/
+```
+
+这些文件被 gitignore 忽略，不会提交。
+
+### 6.3 日常流程
 
 1. 开始改代码前先 `git pull`。CI 可能已经推过上游的合并提交。忘了也没关系：push 会因为落后远程被拒绝，`git pull` 之后再 push 即可。
 2. 改代码、提交、`git push`，CI 会自动构建发布。
@@ -241,7 +268,9 @@ git merge --no-ff -m "chore(fork): merge upstream vX.Y.Z" vX.Y.Z
   git diff --name-status --diff-filter=A HEAD vX.Y.Z -- .github/workflows/
   ```
 
-然后按 [README.md §6](README.md) 的检查清单验证，提交后普通 `git push`，push 会触发构建。
+然后按 §6.2 换上新版本的 native 插件，再按 [README.md §6](README.md) 的检查清单验证，提交后普通 `git push`，push 会触发构建。
+
+冲突通常很小，例如 v18.14.0 只在 `main.ts` 的 import 区冲突：fork 的 `installWorkbench` import 紧挨着上游改动的那一行，保留 fork 的 import、其余取上游即可。
 
 CI 自动合并成功时，上游新增的工作流也会进来，同样要检查。看最近一次上游合并带进来的新工作流：
 
@@ -249,7 +278,7 @@ CI 自动合并成功时，上游新增的工作流也会进来，同样要检�
 m=$(git log -1 --merges --grep='merge upstream' --format=%H origin/custom); git diff --name-status --diff-filter=A "$m^1" "$m" -- .github/workflows/
 ```
 
-可以先执行 `git config rerere.enabled true`，让 git 记住冲突的解决方式，下次遇到同样的冲突自动套用。
+§6.1 已经开启 `rerere.enabled`，git 会记住冲突的解决方式，下次遇到同样的冲突自动套用。
 
 ### 7.2 查看失败原因
 
@@ -260,7 +289,14 @@ m=$(git log -1 --merges --grep='merge upstream' --format=%H origin/custom); git 
   ```bash
   gh run view --log-failed -R Grosser-Kurfuerst/oh-my-pi
   ```
-- 没有登录凭据时，日志接口返回 403。可以用公开接口查看失败步骤和注解：`/repos/Grosser-Kurfuerst/oh-my-pi/actions/runs/<run_id>/jobs` 看哪一步失败，`/repos/Grosser-Kurfuerst/oh-my-pi/check-runs/<job_id>/annotations` 看报错和退出码。
+- 没有 `gh` 或没有登录凭据时（日志接口返回 403），用公开接口查看。最近的运行：
+  ```bash
+  curl -s "https://api.github.com/repos/Grosser-Kurfuerst/oh-my-pi/actions/workflows/fork-release.yml/runs?per_page=10" | jq -r '.workflow_runs[] | "\(.id) \(.event) \(.conclusion) \(.created_at)"'
+  ```
+  某次运行失败的步骤和报错注解（`::error::` 的内容在这里）：
+  ```bash
+  r=<run_id>; j=$(curl -s "https://api.github.com/repos/Grosser-Kurfuerst/oh-my-pi/actions/runs/$r/jobs" | jq -r '.jobs[0].id'); curl -s "https://api.github.com/repos/Grosser-Kurfuerst/oh-my-pi/actions/runs/$r/jobs" | jq -r '.jobs[0].steps[] | select(.conclusion=="failure") | .name'; curl -s "https://api.github.com/repos/Grosser-Kurfuerst/oh-my-pi/check-runs/$j/annotations" | jq -r '.[].message'
+  ```
 
 ### 7.3 已知问题与原因
 
