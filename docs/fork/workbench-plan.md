@@ -1,6 +1,6 @@
 # Fork Workbench：全屏工作台实施方案（方案 B）
 
-> 状态：设计稿，尚未实施。本文档只适用于 `custom` 分支（fork），不提交上游。
+> 状态：M1～M5 已实施，M4、M5 的手动验收项尚未勾选（见 §8）。当前进度见 [README.md §7](README.md)。本文档只适用于 `custom` 分支（fork），不提交上游。
 
 本方案在 omp 的 TUI 上增加一个可开关的**常驻全屏工作台**（Workbench Shell），提供：
 
@@ -100,12 +100,12 @@ packages/coding-agent/src/fork/
 
 | # | 文件（近 30 天上游提交数） | 改动 | 必需 | 引入阶段 |
 |---|---|---|---|---|
-| ① | [main.ts:703](../../packages/coding-agent/src/main.ts:703)（73） | 在 setup wizard 的 `if` 块之后加 `installWorkbench(mode);`，另加 1 行 import | ✅ | M1 |
-| ② | [app-keybindings.ts:89](../../packages/tui/src/app-keybindings.ts:89)（8） | 在 `...TUI_KEYBINDINGS,` 之后加 `...FORK_KEYBINDINGS,`，另加 1 行 import | ✅ | M1 |
+| ① | [main.ts:728](../../packages/coding-agent/src/main.ts:728)（73） | 在 setup wizard 的 `if` 块之后加 `installWorkbench(mode);`，另加 1 行 import | ✅ | M1 |
+| ② | [app-keybindings.ts:97](../../packages/tui/src/app-keybindings.ts:97)（8） | 在 `...TUI_KEYBINDINGS,` 之后加 `...FORK_KEYBINDINGS,`，另加 1 行 import | ✅ | M1 |
 | ③ | [all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts)（6） | 1 行 import，`DOMAINS` 末尾加 1 项（带 `Fork:` 注释） | ✅ | M5 |
-| ④ | [tui.ts:3847](../../packages/tui/src/tui.ts:3847)（68） | `wantAlt` 改为"栈中任一可见覆盖层是 fullscreen" | 可选 | M1 视验证结果决定 |
-| ⑤ | [startup-composer.ts:89](../../packages/coding-agent/src/modes/startup-composer.ts:89)（5） | 在 `beginStartupComposer` 的 `composer.start(...)` 之前加 `openStartupWorkbench(composer, cwd);`，另加 1 行 import | ✅ | M3 之后 |
-| ⑥ | [tui.ts:1164](../../packages/tui/src/tui.ts:1164)（67） | 新增只读 getter `inputDeferred`，暴露私有 `#inputDeferred`；纯新增，不改已有行 | ✅ | M3 之后 |
+| ④ | [tui.ts:3912](../../packages/tui/src/tui.ts:3912)（68） | `wantAlt` 改为"栈中任一可见覆盖层是 fullscreen" | 可选 | M1 视验证结果决定 |
+| ⑤ | [startup-composer.ts:87](../../packages/coding-agent/src/modes/startup-composer.ts:87)（5） | 在 `beginStartupComposer` 的 `composer.start(...)` 之前加 `openStartupWorkbench(composer, cwd);`，另加 1 行 import | ✅ | M3 之后 |
+| ⑥ | [tui.ts:1178](../../packages/tui/src/tui.ts:1178)（67） | 新增只读 getter `inputDeferred`，暴露私有 `#inputDeferred`；纯新增，不改已有行 | ✅ | M3 之后 |
 | ⑦ | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts)（5） | `hotkeyGroups` 返回前 `groups.push(forkHotkeyGroup(...))`，另加 1 行 import | ✅ | M5 |
 
 触点 ⑤ 还连带改了 1 个上游测试：[issue-9597-cold-launch-double-clear.test.ts](../../packages/coding-agent/test/issue-9597-cold-launch-double-clear.test.ts) 走真实预绘制路径，外壳打开期间启动清屏被延后，所以统计前先关闭启动外壳（带 `Fork:` 注释）。触点 ⑤ 本身由 [fork-workbench.test.ts](../../packages/coding-agent/test/fork-workbench.test.ts) 的启动用例守护：这一行在 rebase 中丢失，或被挪到 `start` 之后，测试都会失败。
@@ -149,7 +149,7 @@ export class WorkbenchShell implements Component, OverlayFocusOwner {
    - 高度上限为 `rows - 4`，保证内容区至少有 4 行。超出上限时保留尾部，因为光标和选择器高亮通常在下方。
    - 保留其中的 `CURSOR_MARKER`。只要当前焦点组件是 overlay focus target，[tui.ts:4461](../../packages/tui/src/tui.ts:4461) 就会把硬件光标放在这里，输入法（IME）才能正常工作。
 5. **内容区**：拼接各根组件的渲染行，并逐行清理：
-   - 用 `stripPromptZones()`（[transcript-outline.ts:57](../../packages/tui/src/chat/transcript-outline.ts:57)）去掉 OSC 133 提示区标记；
+   - 用 `stripPromptZones()`（[transcript-outline.ts:58](../../packages/tui/src/chat/transcript-outline.ts:58)）去掉 OSC 133 提示区标记；
    - 去掉残留的 `CURSOR_MARKER`。
 
    清理后交给 `ScrollView.setLines()`（[scroll-view.ts](../../packages/tui/src/components/scroll-view.ts)），`followTail` 默认为 true。
@@ -162,7 +162,7 @@ export class WorkbenchShell implements Component, OverlayFocusOwner {
 
 ### 5.2 焦点与输入路由
 
-**焦点委托**（实现 [tui.ts:356](../../packages/tui/src/tui.ts:356) 的 `OverlayFocusOwner`）：
+**焦点委托**（实现 [tui.ts:358](../../packages/tui/src/tui.ts:358) 的 `OverlayFocusOwner`）：
 
 ```ts
 ownsOverlayFocusTarget(c) {
@@ -174,7 +174,7 @@ ownsOverlayFocusTarget(c) {
 - 其他覆盖层关闭后，焦点会回到外壳本身。这时外壳在 `queueMicrotask` 中把焦点恢复到 `editorContainer` 里第一个 Focusable 子组件：没有内联选择器时是编辑器，打开 `/model` 这类会替换编辑器的选择器时就是该选择器。
 - `tui` 没有公开获取当前焦点的 getter，所以由外壳根据 editorContainer 推导，不修改上游。
 
-**输入优先级**：外壳通过 `ui.addInputListener`（[tui.ts:2443](../../packages/tui/src/tui.ts:2443)）注册一个监听器，只在外壳是最顶层可见覆盖层时生效，按以下顺序处理：
+**输入优先级**：外壳通过 `ui.addInputListener`（[tui.ts:2463](../../packages/tui/src/tui.ts:2463)）注册一个监听器，只在外壳是最顶层可见覆盖层时生效，按以下顺序处理：
 
 1. **SGR 鼠标事件**：交给 `routeSgrMouseInput(data, handler)`（[mouse.ts](../../packages/tui/src/mouse.ts)），按坐标分发到侧边栏、内容区、导航条或底部区。点击底部区会把焦点切回编辑器（M4 有侧边栏焦点后才有意义，目前只是吞掉）。所有鼠标事件都 `consume`。
 2. **全局快捷键**（§6.1）：匹配后 `consume`。
@@ -229,8 +229,8 @@ export function buildTurnIndex(transcript: TranscriptContainer, rows: readonly s
 - **坐标**：选区记录的是内容区的**逻辑行号**（`ScrollView.logicalRowAt(y)`）加显示列号，滚动时选区保持不变。
 - **拖选**：按下时记录 anchor，拖动时更新 head。拖到内容区上下边缘时，启动 50ms 定时器每次自动滚动 ±1 行，并继续扩展选区。
 - **双击 / 三击**：在同一格 400ms 内连续按下，分别选中一个词或整行。词边界按空白和标点判断，CJK 字符逐字成词。
-- **高亮**：合成阶段，对选区覆盖的行，用 `sliceByColumn`（[utils.ts:752](../../packages/tui/src/utils.ts:752)）按列切出纯文本，再加反色重画。宽字符边界向外吸附。
-- **复制**：松开鼠标时，按行切出纯文本，每行去掉尾部空格（`trimEnd`），用 `\n` 连接，然后调用注入的 `deps.copyToClipboard(text)`（即 [clipboard.ts:117](../../packages/coding-agent/src/utils/clipboard.ts:117)：先发 OSC 52，再尝试本机剪贴板）。底部状态行提示"已复制 N 行"。
+- **高亮**：合成阶段，对选区覆盖的行，用 `sliceByColumn`（[utils.ts:762](../../packages/tui/src/utils.ts:762)）按列切出纯文本，再加反色重画。宽字符边界向外吸附。
+- **复制**：松开鼠标时，按行切出纯文本，每行去掉尾部空格（`trimEnd`），用 `\n` 连接，然后调用注入的 `deps.copyToClipboard(text)`（即 [clipboard.ts:129](../../packages/coding-agent/src/utils/clipboard.ts:129)：先发 OSC 52，再尝试本机剪贴板）。底部状态行提示"已复制 N 行"。
 
 **已知限制与兜底**：
 
@@ -250,7 +250,7 @@ export interface SidebarDeps {
 export interface SidebarSession { path: string; title: string; modified: Date; searchText: string }
 ```
 
-`title` 由 `sessionDisplayName(info)`（[session-listing.ts:143](../../packages/coding-agent/src/session/session-listing.ts:143)）生成。会话切换调用 `handleResumeSession`（[selector-controller.ts:1974](../../packages/coding-agent/src/modes/controllers/selector-controller.ts:1974)），沿用上游已有的整套流程：落盘设置、迁移 worktree、`switchSession`、重放 transcript、重新加载 todos。
+`title` 由 `sessionDisplayName(info)`（[session-listing.ts:143](../../packages/coding-agent/src/session/session-listing.ts:143)）生成。会话切换调用 `handleResumeSession`（[selector-controller.ts:1993](../../packages/coding-agent/src/modes/controllers/selector-controller.ts:1993)），沿用上游已有的整套流程：落盘设置、迁移 worktree、`switchSession`、重放 transcript、重新加载 todos。
 
 - **渲染**：
   - 首行是项目名（cwd 的 basename，经 `shortenPath` 处理）和会话数，其下是一条分隔线。
@@ -306,7 +306,7 @@ M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Dis
 |---|---|
 | 切换会话 | `handleResumeSession` 会调用 `renderInitialMessages({ clearTerminalHistory: true })`，登记一次待执行的 clearScrollback。外壳显示期间这次清理不会执行，等外壳关闭、退出 alt screen 时一并执行，所以原生 scrollback 不会混入旧会话的内容。**M1 必须验证。** `chatContainer` 每帧都通过 getter 读取，即使实例被替换也不受影响。 |
 | 其他全屏覆盖层（`/resume`、rewind 等） | 它们成为最顶层，接管 alt 帧和输入；外壳的监听器因为不再是最顶层而自动失效。它们关闭后，外壳重新接管焦点（§5.2）。 |
-| 非全屏覆盖层（center 锚定的 jobs、report 等弹窗） | 现状下 [tui.ts:3847](../../packages/tui/src/tui.ts:3847) 只看最顶层覆盖层是不是 fullscreen，于是终端会退回 normal buffer，外壳闪掉，并补提交 history。处理方式见下文"非全屏覆盖层的两种方案"。 |
+| 非全屏覆盖层（center 锚定的 jobs、report 等弹窗） | 现状下 [tui.ts:3912](../../packages/tui/src/tui.ts:3912) 只看最顶层覆盖层是不是 fullscreen，于是终端会退回 normal buffer，外壳闪掉，并补提交 history。处理方式见下文"非全屏覆盖层的两种方案"。 |
 | resize | 重新布局，按轮次锚点恢复滚动位置（§5.3）；侧边栏按 `minColumns` 自动收起或展开。 |
 | 流式输出 | 订阅 `session.subscribe`，每个事件都 `requestRender`；流式期间外壳另开一个 80ms 定时器，驱动 spinner 和 `beginFrame`。 |
 | 启动预绘制 | `beginStartupComposer` 在首帧之前打开外壳，首帧直接进入 alt screen，不再先显示约 1 秒的内联界面。此时外壳的宿主只有 composer 的编辑器，编辑器固定在底部；`installWorkbench` 用 `rebind` 换成 InteractiveMode。预绘制时 tty 仍是 cooked 模式，打开鼠标上报会把报告回显到画面上，所以外壳的 `mouseTracking` 在 `ui.inputDeferred` 期间为 false；`enableInput()` 切到 raw 输入后的下一帧即打开（实测约 0.65s，早于接管约 1s）。进入全屏到切 raw 之间约 0.4s，滚轮在部分终端会变成方向键，这段无法消除。原生渲染模式下不在预绘制时打开。 |
@@ -660,26 +660,26 @@ M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Dis
 | API | 位置 | 用途 |
 |---|---|---|
 | `ui.showOverlay` / `OverlayOptions.fullscreen` | [tui.ts](../../packages/tui/src/tui.ts) | 外壳本体 |
-| `OverlayFocusOwner.ownsOverlayFocusTarget` | [tui.ts:356](../../packages/tui/src/tui.ts:356) | 焦点委托 |
-| `ui.addInputListener` | [tui.ts:2443](../../packages/tui/src/tui.ts:2443) | 键盘、鼠标拦截 |
+| `OverlayFocusOwner.ownsOverlayFocusTarget` / `overlayStack` / `setFocus` 的持键覆盖层转发 | [tui.ts:358](../../packages/tui/src/tui.ts:358) | 焦点委托；只在外壳位于最上层时记录要归还的焦点 |
+| `ui.addInputListener` | [tui.ts:2463](../../packages/tui/src/tui.ts:2463) | 键盘、鼠标拦截 |
 | `ui.children` 的根节点顺序（只读，用 `instanceof TranscriptContainer` 找对话区） | [interactive-mode.ts](../../packages/coding-agent/src/modes/interactive-mode.ts) 调用 `setRuntimeChildren` 处 | 内容区与底部区的拆分 |
 | `beginStartupComposer` / `Composer.ui` / `Composer.editor` | [startup-composer.ts](../../packages/coding-agent/src/modes/startup-composer.ts)、[composer.ts](../../packages/tui/src/prompt/composer.ts) | 预绘制时打开外壳 |
 | `OverlayOptions.mouseTracking`（每帧重读）/ `TUI.inputDeferred`（触点 ⑥） | [tui.ts](../../packages/tui/src/tui.ts) | cooked 输入期间关闭鼠标上报 |
 | `TranscriptContainer.blockStates` / `setTranscriptAllocation` / `trimBlankEdges` | [transcript-container.ts](../../packages/tui/src/chrome/transcript-container.ts) | 逐块渲染、动画、释放缓存 |
 | `UserMessageComponent` | [user-message.ts:128](../../packages/tui/src/chat/user-message.ts:128) | 轮次识别 |
-| `stripPromptZones` | [transcript-outline.ts:57](../../packages/tui/src/chat/transcript-outline.ts:57) | 清理 OSC 133 |
+| `stripPromptZones` | [transcript-outline.ts:58](../../packages/tui/src/chat/transcript-outline.ts:58) | 清理 OSC 133 |
 | `ScrollView` | [scroll-view.ts](../../packages/tui/src/components/scroll-view.ts) | 内容区滚动 |
 | `routeSgrMouseInput` | [mouse.ts](../../packages/tui/src/mouse.ts) | 鼠标解析 |
-| `sliceByColumn` | [utils.ts:752](../../packages/tui/src/utils.ts:752) | 选区切片 |
-| `KEYBINDINGS` / `Keybindings` 接口 | [app-keybindings.ts:89](../../packages/tui/src/app-keybindings.ts:89) | 快捷键注册 |
+| `sliceByColumn` | [utils.ts:762](../../packages/tui/src/utils.ts:762) | 选区切片 |
+| `KEYBINDINGS` / `Keybindings` 接口 | [app-keybindings.ts:97](../../packages/tui/src/app-keybindings.ts:97) | 快捷键注册 |
 | `hotkeyGroups` | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts) | `/hotkeys` 的 Workbench 分组（触点 ⑦） |
 | `register` / `combine` / `listen` / `DOMAINS` | [registry.ts](../../packages/coding-agent/src/config/registry.ts)、[all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts) | 设置项（触点 ③）；`listen` 在会话中改设置时回写启动缓存 |
 | `getComposerCacheDbPath` | [dirs.ts](../../packages/utils/src/dirs.ts) | 启动缓存 `workbench.json`、`workbench-sessions/` 放在同一目录 |
-| `SessionManager.listForPicker` / `sessionDisplayName` | [session-listing.ts](../../packages/coding-agent/src/session/session-listing.ts) | 会话列表 |
+| `SessionManager.listForPicker`（返回 `PickerListing`，取 `complete`） / `sessionDisplayName` | [session-listing.ts](../../packages/coding-agent/src/session/session-listing.ts) | 会话列表 |
 | `rankSessionSearchMatches` / `SessionSelectorEntry` | [session-selector.ts](../../packages/tui/src/overlays/session-selector.ts) | 侧边栏过滤 |
 | `SessionManager.onSessionNameChanged` | [session-manager.ts](../../packages/coding-agent/src/session/session-manager.ts) | 改名后刷新列表 |
-| `handleResumeSession` / `handleNewCommand` | [selector-controller.ts:1974](../../packages/coding-agent/src/modes/controllers/selector-controller.ts:1974) | 切换、新建会话 |
-| `copyToClipboard` | [clipboard.ts:117](../../packages/coding-agent/src/utils/clipboard.ts:117) | 复制 |
+| `handleResumeSession` / `handleNewCommand` | [selector-controller.ts:1993](../../packages/coding-agent/src/modes/controllers/selector-controller.ts:1993) | 切换、新建会话 |
+| `copyToClipboard` | [clipboard.ts:129](../../packages/coding-agent/src/utils/clipboard.ts:129) | 复制 |
 
 ---
 

@@ -1,12 +1,12 @@
 # omp fork 改造说明
 
-本目录记录这个 fork（`Grosser-Kurfuerst/oh-my-pi`，`custom` 分支）对上游 omp 的改造。`custom` 跟随上游的稳定版发布 tag，由 CI 自动合并，当前基于上游 `v18.12.5`。
+本目录记录这个 fork（`Grosser-Kurfuerst/oh-my-pi`，`custom` 分支）对上游 omp 的改造。`custom` 跟随上游的稳定版发布 tag，由 CI 自动合并，当前基于上游 `v18.16.0`（以最近一次 `chore(fork): merge upstream vX.Y.Z` 提交为准）。
 
 | 文档 | 内容 |
 |---|---|
 | 本文 | fork 版的使用方法、改造点总览、上游触点、同步上游时可能冲突的地方 |
 | [workbench-plan.md](workbench-plan.md) | 全屏工作台的完整方案与迭代记录 |
-| [release-ci.md](release-ci.md) | 同步上游与构建发布的 CI 维护、本机 omp 的安装与更新 |
+| [release-ci.md](release-ci.md) | 同步上游与构建发布的 CI 维护、本机 omp 的安装与更新、新机器搭建开发环境 |
 
 ## 0. 使用 fork 版 omp
 
@@ -80,11 +80,11 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 
 | # | 位置 | 改动 | 近 30 天 | 冲突风险 | 丢失后的表现 / 守护 |
 |---|---|---|---|---|---|
-| ① | [main.ts:703](../../packages/coding-agent/src/main.ts:703) | setup wizard 之后调用 `installWorkbench(mode)`，+1 import | 71 | 中：`runInteractiveMode` 改动频繁，重构后要重新找"`init()` 和首启向导之后"的位置 | 启动外壳不会被接管，只剩编辑器、看不到对话。**没有测试守护**，同步后要手动启动确认 |
-| ② | [app-keybindings.ts:92](../../packages/tui/src/app-keybindings.ts:92) | `KEYBINDINGS` 展开 `...FORK_KEYBINDINGS`，+1 import | 8 | 低 | 工作台快捷键全部失效；外壳测试会失败（测试用的 `KeybindingsManager` 基于完整的 `KEYBINDINGS` 表） |
-| ⑤ | [startup-composer.ts:89](../../packages/coding-agent/src/modes/startup-composer.ts:89) | `composer.start(...)` 之前调用 `openStartupWorkbench(composer, cwd)`，+1 import | 5 | 低 | 启动先显示约 1 秒内联界面再切全屏；`fork-workbench.test.ts` 启动用例会失败。挪到 `start` 之后也会失败 |
+| ① | [main.ts:728](../../packages/coding-agent/src/main.ts:728) | setup wizard 之后调用 `installWorkbench(mode)`，+1 import | 71 | 中：`runInteractiveMode` 改动频繁，重构后要重新找"`init()` 和首启向导之后"的位置 | 启动外壳不会被接管，只剩编辑器、看不到对话。**没有测试守护**，同步后要手动启动确认 |
+| ② | [app-keybindings.ts:97](../../packages/tui/src/app-keybindings.ts:97) | `KEYBINDINGS` 展开 `...FORK_KEYBINDINGS`，+1 import | 8 | 低 | 工作台快捷键全部失效；外壳测试会失败（测试用的 `KeybindingsManager` 基于完整的 `KEYBINDINGS` 表） |
+| ⑤ | [startup-composer.ts:87](../../packages/coding-agent/src/modes/startup-composer.ts:87) | `composer.start(...)` 之前调用 `openStartupWorkbench(composer, cwd)`，+1 import | 5 | 低 | 启动先显示约 1 秒内联界面再切全屏；`fork-workbench.test.ts` 启动用例会失败。挪到 `start` 之后也会失败 |
 | ③ | [all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts) | `DOMAINS` 末尾加 `forkWorkbenchSettings`，+1 import | 6 | 低 | 设置面板和 `omp config` 里看不到这两项；配置文件里的值仍然生效（`fork/workbench.ts` 直接 import 了设置模块）。**没有测试守护**，同步后用 `omp config list \| grep workbench` 确认 |
-| ⑥ | [tui.ts:1164](../../packages/tui/src/tui.ts:1164) | 新增只读 getter `inputDeferred` | 67 | 低：纯新增，只有上游改到相邻的 getter 才会冲突 | 上游改名或删掉 `#inputDeferred` 时 `bun run check` 报错 |
+| ⑥ | [tui.ts:1178](../../packages/tui/src/tui.ts:1178) | 新增只读 getter `inputDeferred` | 67 | 低：纯新增，只有上游改到相邻的 getter 才会冲突 | 上游改名或删掉 `#inputDeferred` 时 `bun run check` 报错 |
 | ⑦ | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts) | `hotkeyGroups` 返回前追加 `forkHotkeyGroup(...)`，+1 import | 5 | 低 | `/hotkeys` 不再列出工作台快捷键；`fork-workbench-hotkeys.test.ts` 会失败 |
 | — | [AGENTS.md](../../AGENTS.md) | 末尾加"Fork 改造"一节：少与上游冲突、改造要记进本文 | 3 | 低：加在文件末尾，上游改其他章节不会冲突 | agent 不再知道 fork 的改造规则 |
 | — | [build-service.ts:49](../../packages/coding-agent/src/cli/build-service.ts:49) | `DEFAULT_BUILD_URL` 改为 fork 构建索引；测试改为引用该常量 | 1 | 低 | 冲突时**必须保留 fork 的地址**，否则 `omp update` 会装回上游版本 |
@@ -129,3 +129,10 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
    - 宽终端左侧有会话列表，单击能切换会话；
    - 退出后终端恢复正常。
 5. 第 4 节的依赖如有变化，对照 [workbench-plan.md §11](workbench-plan.md) 修复。
+
+## 7. 当前进度
+
+- M1～M5 都已实施并合入 `custom`，已发布在 fork 的构建里。
+- 待手动验收：M4 侧边栏、M5 设置项和 `/hotkeys`、M1～M4 回归，清单见 [workbench-plan.md §8](workbench-plan.md) 中未勾选的项。
+- 同步上游 v18.16.0 后修过两个问题：侧边栏一直显示"会话列表加载失败"（上游改了 `listForPicker` 的返回值，见第 4 节）；从 `/providers` 的登录框退出后按键全部失效（见第 4 节"焦点归还"）。两者都有回归测试。
+- 未实施：触点 ④（非全屏弹窗叠在外壳上时的闪烁）、附录 B 的多会话并行。

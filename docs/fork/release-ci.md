@@ -312,6 +312,7 @@ m=$(git log -1 --merges --grep='merge upstream' --format=%H origin/custom); git 
 | `Build binary` 报 `Binary reports ..., expected ...` | 二进制的版本和 fork 版本号不一致，通常是 `Stamp fork version` 被改坏，或者 `VERSION` 不再来自 `packages/utils/package.json` | 查看 `packages/utils/src/dirs.ts` 中 `VERSION` 的来源，相应调整 `Stamp fork version` |
 | Actions 里有上游的工作流一直排队或失败 | 上游新增了工作流文件，合并进来后默认启用 | 用 `gh workflow disable` 禁用，见 §3 |
 | 定时任务不再运行 | 公开仓库 60 天没有活动时，GitHub 会停用定时任务 | 在 Actions 页面重新启用。上游发版频繁，`build-index` 会经常有提交，一般不会出现 |
+| 构建成功，但 fork 功能坏了（如 v18.16.0 后侧边栏一直显示"会话列表加载失败"） | CI 合并上游后只构建，不跑 `bun run check` 和测试；上游改了 fork 依赖的接口（这次是 `listForPicker` 的返回值）也能编译打包 | 每次同步后在本地按 [README.md §6](README.md) 的清单跑检查和 fork 测试，再修 |
 | 构建报 native 版本戳不匹配 | fork 改了 `crates/` 或 `packages/natives`，npm 上的预编译插件对不上 | 需要在工作流里安装 Rust 工具链，用 `bun run build:native` 自行编译 |
 
 ### 7.4 限制
