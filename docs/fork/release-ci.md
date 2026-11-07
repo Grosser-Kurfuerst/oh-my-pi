@@ -270,7 +270,7 @@ git merge --no-ff -m "chore(fork): merge upstream vX.Y.Z" vX.Y.Z
 
 然后按 §6.2 换上新版本的 native 插件，再按 [README.md §6](README.md) 的检查清单验证，提交后普通 `git push`，push 会触发构建。
 
-冲突通常很小，例如 v18.14.0 只在 `main.ts` 的 import 区冲突：fork 的 `installWorkbench` import 紧挨着上游改动的那一行，保留 fork 的 import、其余取上游即可。
+冲突通常很小，例如 v18.14.0 只在 `main.ts` 的 import 区冲突：fork 的 `installWorkbench` import 紧挨着上游改动的那一行，保留 fork 的 import、其余取上游即可。v18.17.0、v18.18.0 在 `all-settings.ts` 的 `DOMAINS` 末尾冲突：上游追加了 `spotlightSettings`，fork 项也在末尾；两边都保留，fork 项已改放到 `titleSettings` 之后（[README.md §3](README.md) 触点 ③）。
 
 CI 自动合并成功时，上游新增的工作流也会进来，同样要检查。看最近一次上游合并带进来的新工作流：
 

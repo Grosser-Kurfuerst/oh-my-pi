@@ -1,6 +1,6 @@
 # omp fork 改造说明
 
-本目录记录这个 fork（`Grosser-Kurfuerst/oh-my-pi`，`custom` 分支）对上游 omp 的改造。`custom` 跟随上游的稳定版发布 tag，由 CI 自动合并，当前基于上游 `v18.16.0`（以最近一次 `chore(fork): merge upstream vX.Y.Z` 提交为准）。
+本目录记录这个 fork（`Grosser-Kurfuerst/oh-my-pi`，`custom` 分支）对上游 omp 的改造。`custom` 跟随上游的稳定版发布 tag，由 CI 自动合并，当前基于上游 `v18.18.0`（以最近一次 `chore(fork): merge upstream vX.Y.Z` 提交为准）。
 
 | 文档 | 内容 |
 |---|---|
@@ -80,16 +80,16 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 
 | # | 位置 | 改动 | 近 30 天 | 冲突风险 | 丢失后的表现 / 守护 |
 |---|---|---|---|---|---|
-| ① | [main.ts:728](../../packages/coding-agent/src/main.ts:728) | setup wizard 之后调用 `installWorkbench(mode)`，+1 import | 71 | 中：`runInteractiveMode` 改动频繁，重构后要重新找"`init()` 和首启向导之后"的位置 | 启动外壳不会被接管，只剩编辑器、看不到对话。**没有测试守护**，同步后要手动启动确认 |
+| ① | [main.ts:737](../../packages/coding-agent/src/main.ts:737) | setup wizard 之后调用 `installWorkbench(mode)`，+1 import | 71 | 中：`runInteractiveMode` 改动频繁，重构后要重新找"`init()` 和首启向导之后"的位置 | 启动外壳不会被接管，只剩编辑器、看不到对话。**没有测试守护**，同步后要手动启动确认 |
 | ② | [app-keybindings.ts:97](../../packages/tui/src/app-keybindings.ts:97) | `KEYBINDINGS` 展开 `...FORK_KEYBINDINGS`，+1 import | 8 | 低 | 工作台快捷键全部失效；外壳测试会失败（测试用的 `KeybindingsManager` 基于完整的 `KEYBINDINGS` 表） |
 | ⑤ | [startup-composer.ts:87](../../packages/coding-agent/src/modes/startup-composer.ts:87) | `composer.start(...)` 之前调用 `openStartupWorkbench(composer, cwd)`，+1 import | 5 | 低 | 启动先显示约 1 秒内联界面再切全屏；`fork-workbench.test.ts` 启动用例会失败。挪到 `start` 之后也会失败 |
-| ③ | [all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts) | `DOMAINS` 末尾加 `forkWorkbenchSettings`，+1 import | 6 | 低 | 设置面板和 `omp config` 里看不到这两项；配置文件里的值仍然生效（`fork/workbench.ts` 直接 import 了设置模块）。**没有测试守护**，同步后用 `omp config list \| grep workbench` 确认 |
-| ⑥ | [tui.ts:1178](../../packages/tui/src/tui.ts:1178) | 新增只读 getter `inputDeferred` | 67 | 低：纯新增，只有上游改到相邻的 getter 才会冲突 | 上游改名或删掉 `#inputDeferred` 时 `bun run check` 报错 |
+| ③ | [all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts) | `DOMAINS` 中 `titleSettings` 之后加 `forkWorkbenchSettings`，+1 import | 6 | 低：不放数组末尾，上游新增设置域通常追加在末尾（v18.17.0 追加 `spotlightSettings` 时冲突过）；放在 `titleSettings` 之后，fork 项在面板里仍排在 Display 分组最后 | 设置面板和 `omp config` 里看不到这两项；配置文件里的值仍然生效（`fork/workbench.ts` 直接 import 了设置模块）。**没有测试守护**，同步后用 `omp config list \| grep workbench` 确认 |
+| ⑥ | [tui.ts:1210](../../packages/tui/src/tui.ts:1210) | 新增只读 getter `inputDeferred` | 67 | 低：纯新增，只有上游改到相邻的 getter 才会冲突 | 上游改名或删掉 `#inputDeferred` 时 `bun run check` 报错 |
 | ⑦ | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts) | `hotkeyGroups` 返回前追加 `forkHotkeyGroup(...)`，+1 import | 5 | 低 | `/hotkeys` 不再列出工作台快捷键；`fork-workbench-hotkeys.test.ts` 会失败 |
 | — | [AGENTS.md](../../AGENTS.md) | 末尾加"Fork 改造"一节：少与上游冲突、改造要记进本文 | 3 | 低：加在文件末尾，上游改其他章节不会冲突 | agent 不再知道 fork 的改造规则 |
 | — | [build-service.ts:49](../../packages/coding-agent/src/cli/build-service.ts:49) | `DEFAULT_BUILD_URL` 改为 fork 构建索引；测试改为引用该常量 | 1 | 低 | 冲突时**必须保留 fork 的地址**，否则 `omp update` 会装回上游版本 |
 
-还改了一个上游测试：[issue-9597-cold-launch-double-clear.test.ts:128](../../packages/coding-agent/test/issue-9597-cold-launch-double-clear.test.ts:128)（近 30 天 4 次）。它检查冷启动只清屏一次；工作台打开期间清屏被推迟，所以断言前先关闭启动外壳（带 `Fork:` 注释）。上游改这个测试时会冲突，保留这几行即可。
+还改了一个上游测试：[issue-9597-cold-launch-double-clear.test.ts:127](../../packages/coding-agent/test/issue-9597-cold-launch-double-clear.test.ts:127)（近 30 天 4 次）。它检查冷启动只清屏一次；工作台打开期间清屏被推迟，所以断言前先关闭启动外壳（带 `Fork:` 注释）。上游改这个测试时会冲突，保留这几行即可。
 
 方案里预留、尚未实施的触点：④ `tui.ts` 的 `wantAlt` 判断（非全屏弹窗叠在外壳上时的闪烁，目前未处理）。编号沿用 [workbench-plan.md §4.2](workbench-plan.md)。
 
@@ -104,6 +104,7 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 - **对话组件**：`TranscriptContainer` 的 `blockStates`、对话块的 `setTranscriptAllocation`、`UserMessageComponent` 等提问组件（轮次识别）、`stripPromptZones`。
 - **启动预绘制**：`beginStartupComposer` 的 `deferInput` 启动、`enableInput()` 的调用时机、`ComposerLease.adopt()`。
 - **会话侧边栏**：`SessionManager.listForPicker`（侧边栏取它的 `complete`，即完整扫描；首批 `sessions` 只含已索引标题的会话。v18.16.0 曾把返回值从数组改成这个结构）、`sessionDisplayName`、`rankSessionSearchMatches`，以及 InteractiveMode 的 `handleResumeSession`、`handleNewCommand`、`session.isStreaming`。签名变化 `bun run check` 能发现；行为变化（例如切换时不再中止当前回合）发现不了。
+- **spinner 时钟**：侧边栏运行中标记的帧取自 `spinner-clock.ts` 的 `sharedSpinnerFrame`（v18.17.0 删掉了原来用的 `SPINNER_ADVANCE_MS`）。外壳传给对话块的动画帧 `tick` 按固定 80ms（`ANIMATION_TICK_MS`）计算，与上游 [composer.ts:465](../../packages/tui/src/prompt/composer.ts:465) 一致；上游改那里时外壳要跟着改。
 
 ## 5. 与上游的行为差异
 
@@ -135,4 +136,5 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 - M1～M5 都已实施并合入 `custom`，已发布在 fork 的构建里。
 - 待手动验收：M4 侧边栏、M5 设置项和 `/hotkeys`、M1～M4 回归，清单见 [workbench-plan.md §8](workbench-plan.md) 中未勾选的项。
 - 同步上游 v18.16.0 后修过两个问题：侧边栏一直显示"会话列表加载失败"（上游改了 `listForPicker` 的返回值，见第 4 节）；从 `/providers` 的登录框退出后按键全部失效（见第 4 节"焦点归还"）。两者都有回归测试。
+- 同步上游 v18.18.0（含 v18.17.0）：`all-settings.ts` 的 `DOMAINS` 末尾冲突，fork 项改放到 `titleSettings` 之后（触点 ③）；侧边栏改用上游的共享 spinner 时钟（见第 4 节）。
 - 未实施：触点 ④（非全屏弹窗叠在外壳上时的闪烁）、附录 B 的多会话并行。

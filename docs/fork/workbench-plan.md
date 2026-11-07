@@ -100,12 +100,12 @@ packages/coding-agent/src/fork/
 
 | # | 文件（近 30 天上游提交数） | 改动 | 必需 | 引入阶段 |
 |---|---|---|---|---|
-| ① | [main.ts:728](../../packages/coding-agent/src/main.ts:728)（73） | 在 setup wizard 的 `if` 块之后加 `installWorkbench(mode);`，另加 1 行 import | ✅ | M1 |
+| ① | [main.ts:737](../../packages/coding-agent/src/main.ts:737)（73） | 在 setup wizard 的 `if` 块之后加 `installWorkbench(mode);`，另加 1 行 import | ✅ | M1 |
 | ② | [app-keybindings.ts:97](../../packages/tui/src/app-keybindings.ts:97)（8） | 在 `...TUI_KEYBINDINGS,` 之后加 `...FORK_KEYBINDINGS,`，另加 1 行 import | ✅ | M1 |
-| ③ | [all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts)（6） | 1 行 import，`DOMAINS` 末尾加 1 项（带 `Fork:` 注释） | ✅ | M5 |
+| ③ | [all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts)（6） | 1 行 import，`DOMAINS` 中 `titleSettings` 之后加 1 项（带 `Fork:` 注释；原先加在末尾，v18.17.0 起改到这里以避开上游的追加） | ✅ | M5 |
 | ④ | [tui.ts:3912](../../packages/tui/src/tui.ts:3912)（68） | `wantAlt` 改为"栈中任一可见覆盖层是 fullscreen" | 可选 | M1 视验证结果决定 |
 | ⑤ | [startup-composer.ts:87](../../packages/coding-agent/src/modes/startup-composer.ts:87)（5） | 在 `beginStartupComposer` 的 `composer.start(...)` 之前加 `openStartupWorkbench(composer, cwd);`，另加 1 行 import | ✅ | M3 之后 |
-| ⑥ | [tui.ts:1178](../../packages/tui/src/tui.ts:1178)（67） | 新增只读 getter `inputDeferred`，暴露私有 `#inputDeferred`；纯新增，不改已有行 | ✅ | M3 之后 |
+| ⑥ | [tui.ts:1210](../../packages/tui/src/tui.ts:1210)（67） | 新增只读 getter `inputDeferred`，暴露私有 `#inputDeferred`；纯新增，不改已有行 | ✅ | M3 之后 |
 | ⑦ | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts)（5） | `hotkeyGroups` 返回前 `groups.push(forkHotkeyGroup(...))`，另加 1 行 import | ✅ | M5 |
 
 触点 ⑤ 还连带改了 1 个上游测试：[issue-9597-cold-launch-double-clear.test.ts](../../packages/coding-agent/test/issue-9597-cold-launch-double-clear.test.ts) 走真实预绘制路径，外壳打开期间启动清屏被延后，所以统计前先关闭启动外壳（带 `Fork:` 注释）。触点 ⑤ 本身由 [fork-workbench.test.ts](../../packages/coding-agent/test/fork-workbench.test.ts) 的启动用例守护：这一行在 rebase 中丢失，或被挪到 `start` 之后，测试都会失败。
@@ -676,6 +676,8 @@ M5 只实现了前两项，经触点 ③ 进入设置面板（Appearance → Dis
 | `register` / `combine` / `listen` / `DOMAINS` | [registry.ts](../../packages/coding-agent/src/config/registry.ts)、[all-settings.ts](../../packages/coding-agent/src/config/all-settings.ts) | 设置项（触点 ③）；`listen` 在会话中改设置时回写启动缓存 |
 | `getComposerCacheDbPath` | [dirs.ts](../../packages/utils/src/dirs.ts) | 启动缓存 `workbench.json`、`workbench-sessions/` 放在同一目录 |
 | `SessionManager.listForPicker`（返回 `PickerListing`，取 `complete`） / `sessionDisplayName` | [session-listing.ts](../../packages/coding-agent/src/session/session-listing.ts) | 会话列表 |
+| `sharedSpinnerFrame` | [spinner-clock.ts](../../packages/tui/src/spinner-clock.ts) | 侧边栏运行中标记的 spinner 帧 |
+| `AnimationFrame.tick`（固定 80ms，与上游 composer 一致） | [composer.ts:465](../../packages/tui/src/prompt/composer.ts:465) | 外壳传给对话块的动画帧 |
 | `rankSessionSearchMatches` / `SessionSelectorEntry` | [session-selector.ts](../../packages/tui/src/overlays/session-selector.ts) | 侧边栏过滤 |
 | `SessionManager.onSessionNameChanged` | [session-manager.ts](../../packages/coding-agent/src/session/session-manager.ts) | 改名后刷新列表 |
 | `handleResumeSession` / `handleNewCommand` | [selector-controller.ts:1993](../../packages/coding-agent/src/modes/controllers/selector-controller.ts:1993) | 切换、新建会话 |
