@@ -84,6 +84,7 @@ CI 往 `custom` 推合并提交时会再触发一次运行。那次运行发现�
 
    PAT 有到期时间，在创建它的账号下 Settings → Developer settings → Personal access tokens → Fine-grained tokens 查看，到期前重新生成并更新 Secret。Secret 只能覆盖，不能读出原值。
 4. **失败通知**：定时运行失败的邮件只发给最后修改 `cron` 那一行的人（没人改过就是创建工作流的人）；push 触发的运行发给推送者，CI 自己推送的合并提交算作 PAT 所属账号。换人维护时，新维护者要自己留意 Actions 页面，或者在仓库 Watch 设置里订阅 Actions。
+5. **不保留 `main` 分支**：fork 时复制来的 `main` 不会自动更新，也没有流程用到它，已删除（远程和本地都删了）。留着它的话，根目录 `bun check` 会把它和 `custom` 的合并基之后上游改过的 Rust 文件都算成本分支的改动（[run-rs-task.ts](../../scripts/run-rs-task.ts) 同时对比 `upstream/main` 和 `origin/main`），每次都跑 Rust 检查。对比基准用 `upstream/main`，VS Code 的设置为 `git config branch.custom.vscode-merge-base upstream/main`。
 
 ## 4. build-index 索引格式
 
