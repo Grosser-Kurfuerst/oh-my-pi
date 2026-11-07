@@ -4,9 +4,9 @@
  * injected deps (coding-agent `fork/workbench.ts`).
  */
 import * as logger from "@oh-my-pi/pi-utils/logger";
-import { SPINNER_ADVANCE_MS } from "../../components/loader";
 import { extractPrintableText } from "../../keys";
 import { getKeybindings } from "../../keybindings";
+import { sharedSpinnerFrame } from "../../spinner-clock";
 import { rankSessionSearchMatches, type SessionSelectorEntry } from "../../overlays/session-selector";
 import { theme } from "../../theme";
 import { padding, truncateToWidth, visibleWidth } from "../../utils";
@@ -295,7 +295,7 @@ export class SessionSidebar {
 	#currentMarker(): string {
 		if (!this.#deps.isStreaming()) return "●";
 		const frames = theme.spinnerFrames;
-		return frames[Math.floor(performance.now() / SPINNER_ADVANCE_MS) % frames.length] ?? "●";
+		return frames[sharedSpinnerFrame(frames.length)] ?? "●";
 	}
 
 	#emptyText(): string {
