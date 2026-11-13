@@ -11,11 +11,11 @@ can1357/oh-my-pi ──(定时拉取 v* 稳定版 tag)──▶ Grosser-Kurfuers
                                               ├─ custom：上游 tag + fork 改造（merge，只追加不改写）
                                               ├─ Releases：kf-v<版本>-<commit>/omp-linux-x64
                                               └─ build-index：静态 JSON，冒充构建服务
-本机 omp ──(DEFAULT_BUILD_URL 指向 build-index)──▶ omp update 安装 fork 的构建
+本机 omp ──(omp 产品默认指向 build-index)──▶ omp update 安装 fork 的构建
 ```
 
 - 工作流：[.github/workflows/fork-release.yml](../../.github/workflows/fork-release.yml)
-- 构建服务客户端：[build-service.ts](../../packages/coding-agent/src/cli/build-service.ts)。`DEFAULT_BUILD_URL` 已改为 fork 的索引地址（上游触点见 [README.md §3](README.md)），环境变量 `PI_BUILD_URL` 仍可覆盖。
+- 构建服务客户端：[build-service.ts](../../packages/coding-agent/src/cli/build-service.ts)。通过 [fork/build-service.ts](../../packages/coding-agent/src/fork/build-service.ts) 仅将 `omp` 产品的默认源指向 fork 索引；`DEFAULT_BUILD_URL` 保持上游地址，供 ABKit 等其他产品使用（上游触点见 [README.md §3](README.md)）。环境变量 `PI_BUILD_URL` 优先于所有产品的默认源。
 - 索引分支：`build-index`，孤儿分支，只有 `README.md` 和 `api/` 下的 JSON，不含源码。
 
 只跟上游**已发到 npm 的稳定版发布 tag**（`vX.Y.Z`，不含 `-canary.*`），不跟上游 `main`，原因是：
@@ -262,7 +262,7 @@ git merge --no-ff -m "chore(fork): merge upstream vX.Y.Z" vX.Y.Z
 
 提交信息和 CI 自动合并时保持一致。合并前先确认 npm 上已有 `@oh-my-pi/pi-natives-linux-x64` 的 `X.Y.Z` 版本，否则构建会在下载 native 插件时 404。解决冲突时：
 
-- 按 [README.md §3](README.md) 处理上游触点的冲突。`build-service.ts` 冲突时**必须保留 fork 的 `DEFAULT_BUILD_URL`**，否则 `omp update` 会装回官方版。
+- 按 [README.md §3](README.md) 处理上游触点的冲突。`build-service.ts` 冲突时**必须保留按产品选择默认源的接入点**：`omp` 走 fork 索引，ABKit 等其他产品走上游。不要把 `DEFAULT_BUILD_URL` 全局改为 fork 地址，否则浏览器引擎下载也会误用 fork 索引。
 - `bun.lock` 冲突时取上游的版本（`git checkout --theirs bun.lock`），再执行 `bun install` 确认没有变化。fork 没有加依赖，正常不会冲突。
 - 检查上游有没有新增工作流文件，有的话 push 之后禁用（见 §3）：
   ```bash
@@ -271,7 +271,7 @@ git merge --no-ff -m "chore(fork): merge upstream vX.Y.Z" vX.Y.Z
 
 然后按 §6.2 换上新版本的 native 插件，再按 [README.md §6](README.md) 的检查清单验证，提交后普通 `git push`，push 会触发构建。
 
-冲突通常很小，例如 v18.14.0 只在 `main.ts` 的 import 区冲突：fork 的 `installWorkbench` import 紧挨着上游改动的那一行，保留 fork 的 import、其余取上游即可。v18.17.0、v18.18.0 在 `all-settings.ts` 的 `DOMAINS` 末尾冲突：上游追加了 `spotlightSettings`，fork 项也在末尾；两边都保留，fork 项已改放到 `titleSettings` 之后（[README.md §3](README.md) 触点 ③）。
+冲突通常很小，例如 v18.14.0 只在 `main.ts` 的 import 区冲突：fork 的 `installWorkbench` import 紧挨着上游改动的那一行，保留 fork 的 import、其余取上游即可。v18.17.0、v18.18.0 在 `all-settings.ts` 的 `DOMAINS` 末尾冲突：上游追加了 `spotlightSettings`，fork 项也在末尾；两边都保留，fork 项已改放到 `titleSettings` 之后（[README.md §3](README.md) 触点 ③）。v18.19.0 在 `build-service.test.ts` 的 import 区冲突；指定版本测试现改用显式源，fork 路由测试独立放在 `fork-build-service.test.ts`，不再需要在上游测试里导入默认源常量。
 
 CI 自动合并成功时，上游新增的工作流也会进来，同样要检查。看最近一次上游合并带进来的新工作流：
 
@@ -369,7 +369,7 @@ m=$(git log -1 --merges --grep='merge upstream' --format=%H origin/custom); git 
 - **不要提交任何 `package.json` 的版本号改动。** fork 版本号只在构建机上生成（§2.1）；`packages/natives/package.json` 尤其不能改。
 - **不要手改 `build-index` 下 `api/` 里的 JSON。** `size`、`sha256` 对不上时 omp 会拒绝安装；手改的内容也会在下一次发布时被覆盖。README 等说明文件可以改。
 - **不要把本地的 `build-index` 分支直接 push。** 它通常落后远程，要改说明文件时，先 `git fetch origin build-index`，基于 `origin/build-index` 修改。
-- **不要改掉或丢掉 fork 的 `DEFAULT_BUILD_URL`**（合并冲突时尤其注意）。
+- **不要丢掉 omp 产品默认走 fork 索引的接入点**（合并冲突时尤其注意），也不要将 ABKit 等其他产品的默认源改成 fork 索引。
 - **不要把构建产物提交进仓库**（`packages/coding-agent/binaries/`、`packages/natives/native/*.node`）。
 - **不要删掉工作流里的 `GH_REPO`**，不要换回默认的 `GITHUB_TOKEN`（原因见 §3）。
 

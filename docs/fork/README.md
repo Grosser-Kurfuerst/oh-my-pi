@@ -1,6 +1,6 @@
 # omp fork 改造说明
 
-本目录记录这个 fork（`Grosser-Kurfuerst/oh-my-pi`，`custom` 分支）对上游 omp 的改造。`custom` 跟随上游的稳定版发布 tag，由 CI 自动合并，当前基于上游 `v18.18.0`（以最近一次 `chore(fork): merge upstream vX.Y.Z` 提交为准）。
+本目录记录这个 fork（`Grosser-Kurfuerst/oh-my-pi`，`custom` 分支）对上游 omp 的改造。`custom` 跟随上游的稳定版发布 tag，由 CI 自动合并，当前基于上游 `v18.19.0`（以最近一次 `chore(fork): merge upstream vX.Y.Z` 提交为准）。
 
 | 文档 | 内容 |
 |---|---|
@@ -64,15 +64,15 @@ PI_BUILD_URL=https://raw.githubusercontent.com/Grosser-Kurfuerst/oh-my-pi/build-
 
 ### 1.2 自动更新指向 fork 的构建
 
-`omp update` 默认从本 fork `build-index` 分支上的静态构建索引安装，而不是上游的 `build.stencil.so`。仍可用 `PI_BUILD_URL` 覆盖。构建由 [fork-release.yml](../../.github/workflows/fork-release.yml) 自动发布，维护和使用方式见 [release-ci.md](release-ci.md)。
+`omp update` 默认从本 fork `build-index` 分支上的静态构建索引安装；ABKit 等其他产品仍使用上游 `build.stencil.so`。显式设置 `PI_BUILD_URL` 会覆盖所有产品的构建源。构建由 [fork-release.yml](../../.github/workflows/fork-release.yml) 自动发布，维护和使用方式见 [release-ci.md](release-ci.md)。
 
 ## 2. 代码布局
 
 fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 
 - [packages/tui/src/fork/](../../packages/tui/src/fork/)：快捷键表、`/hotkeys` 分组、外壳及其纯函数模块（布局、轮次索引、导航条、选区）、会话侧边栏；`workbench/index.ts` 顶部有上游 API 依赖清单
-- [packages/coding-agent/src/fork/](../../packages/coding-agent/src/fork/)：`installWorkbench`（装配到 InteractiveMode，提供会话列表与切换、读取设置）、`workbench-startup.ts`（预绘制时打开、安装时交接、启动缓存）、`workbench-settings.ts`（设置项）
-- 测试：`packages/tui/test/fork-workbench-*.test.ts`、`packages/coding-agent/test/fork-workbench.test.ts`
+- [packages/coding-agent/src/fork/](../../packages/coding-agent/src/fork/)：`installWorkbench`（装配到 InteractiveMode，提供会话列表与切换、读取设置）、`workbench-startup.ts`（预绘制时打开、安装时交接、启动缓存）、`workbench-settings.ts`（设置项）、`build-service.ts`（按产品选择默认构建源）
+- 测试：`packages/tui/test/fork-workbench-*.test.ts`、`packages/coding-agent/test/fork-workbench.test.ts`、`packages/coding-agent/test/fork-build-service.test.ts`
 
 ## 3. 上游触点
 
@@ -87,7 +87,7 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 | ⑥ | [tui.ts:1210](../../packages/tui/src/tui.ts:1210) | 新增只读 getter `inputDeferred` | 67 | 低：纯新增，只有上游改到相邻的 getter 才会冲突 | 上游改名或删掉 `#inputDeferred` 时 `bun run check` 报错 |
 | ⑦ | [hotkeys-markdown.ts](../../packages/tui/src/hotkeys-markdown.ts) | `hotkeyGroups` 返回前追加 `forkHotkeyGroup(...)`，+1 import | 5 | 低 | `/hotkeys` 不再列出工作台快捷键；`fork-workbench-hotkeys.test.ts` 会失败 |
 | — | [AGENTS.md](../../AGENTS.md) | 末尾加"Fork 改造"一节：少与上游冲突、改造要记进本文 | 3 | 低：加在文件末尾，上游改其他章节不会冲突 | agent 不再知道 fork 的改造规则 |
-| — | [build-service.ts:49](../../packages/coding-agent/src/cli/build-service.ts:49) | `DEFAULT_BUILD_URL` 改为 fork 构建索引；测试改为引用该常量 | 1 | 低 | 冲突时**必须保留 fork 的地址**，否则 `omp update` 会装回上游版本 |
+| — | [build-service.ts](../../packages/coding-agent/src/cli/build-service.ts) | `buildServiceUrl` 接收产品并调用 `forkBuildServiceDefault`，`fetchBuild` 传入产品，+1 import；`DEFAULT_BUILD_URL` 保持上游值。上游测试的指定版本用例改用显式源，fork 默认源由独立测试守护 | 1 | 低 | 丢失接入点会让 `omp update` 装回上游版本；丢失产品参数会让 ABKit 请求 fork 索引；`fork-build-service.test.ts` 守护默认路由和显式源覆盖 |
 
 还改了一个上游测试：[issue-9597-cold-launch-double-clear.test.ts:127](../../packages/coding-agent/test/issue-9597-cold-launch-double-clear.test.ts:127)（近 30 天 4 次）。它检查冷启动只清屏一次；工作台打开期间清屏被推迟，所以断言前先关闭启动外壳（带 `Fork:` 注释）。上游改这个测试时会冲突，保留这几行即可。
 
@@ -105,6 +105,7 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 - **启动预绘制**：`beginStartupComposer` 的 `deferInput` 启动、`enableInput()` 的调用时机、`ComposerLease.adopt()`。
 - **会话侧边栏**：`SessionManager.listForPicker`（侧边栏取它的 `complete`，即完整扫描；首批 `sessions` 只含已索引标题的会话。v18.16.0 曾把返回值从数组改成这个结构）、`sessionDisplayName`、`rankSessionSearchMatches`，以及 InteractiveMode 的 `handleResumeSession`、`handleNewCommand`、`session.isStreaming`。签名变化 `bun run check` 能发现；行为变化（例如切换时不再中止当前回合）发现不了。
 - **spinner 时钟**：侧边栏运行中标记的帧取自 `spinner-clock.ts` 的 `sharedSpinnerFrame`（v18.17.0 删掉了原来用的 `SPINNER_ADVANCE_MS`）。外壳传给对话块的动画帧 `tick` 按固定 80ms（`ANIMATION_TICK_MS`）计算，与上游 [composer.ts:465](../../packages/tui/src/prompt/composer.ts:465) 一致；上游改那里时外壳要跟着改。
+- **构建服务产品路由**：v18.19.0 起 `fetchBuild` 也用于下载 ABKit，依赖 `BuildProduct.id` 和产品参数传递；仅 `omp` 默认走 fork 索引。上游改变产品标识或绕过 `buildServiceUrl` 时，需要重新确认更新检查、指定版本安装和浏览器引擎下载的地址。
 
 ## 5. 与上游的行为差异
 
@@ -123,7 +124,7 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 2. 按 [release-ci.md §6.2](release-ci.md) 换上新版本的 native 插件（否则第 3 步的测试会报插件版本不符），然后在 `packages/tui` 和 `packages/coding-agent` 下分别运行 `bun run check`。
 3. 运行 fork 相关测试：
    - `packages/tui`：`bun test test/fork-workbench`
-   - `packages/coding-agent`：`bun test test/fork-workbench.test.ts test/issue-9597-cold-launch-double-clear.test.ts test/startup-composer test/cli/build-service.test.ts`
+   - `packages/coding-agent`：`bun test test/fork-workbench.test.ts test/issue-9597-cold-launch-double-clear.test.ts test/startup-composer test/fork-build-service.test.ts test/cli/build-service.test.ts test/cli/update-cli.test.ts test/tools/browser-webkit-install.test.ts`
 4. 手动启动 omp，确认：
    - 第一帧就是全屏，能看到对话内容（触点 ① 没有测试守护）；
    - 滚轮能滚动，`ctrl+n` 能切换；
@@ -137,4 +138,5 @@ fork 自有代码都放在 `fork/` 目录，和上游零冲突：
 - 待手动验收：M4 侧边栏、M5 设置项和 `/hotkeys`、M1～M4 回归，清单见 [workbench-plan.md §8](workbench-plan.md) 中未勾选的项。
 - 同步上游 v18.16.0 后修过两个问题：侧边栏一直显示"会话列表加载失败"（上游改了 `listForPicker` 的返回值，见第 4 节）；从 `/providers` 的登录框退出后按键全部失效（见第 4 节"焦点归还"）。两者都有回归测试。
 - 同步上游 v18.18.0（含 v18.17.0）：`all-settings.ts` 的 `DOMAINS` 末尾冲突，fork 项改放到 `titleSettings` 之后（触点 ③）；侧边栏改用上游的共享 spinner 时钟（见第 4 节）。
+- 同步上游 v18.19.0：解决 `build-service.test.ts` 的导入冲突；构建源改为按产品选择，避免新增的 ABKit 下载误用仅发布 omp 的 fork 索引。
 - 未实施：触点 ④（非全屏弹窗叠在外壳上时的闪烁）、附录 B 的多会话并行。

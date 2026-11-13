@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import {
 	type BuildHost,
-	DEFAULT_BUILD_URL,
 	downloadBuildFile,
 	fetchBuild,
 	isMuslLinuxForTest,
@@ -145,7 +144,8 @@ describe("fetchBuild", () => {
 	});
 
 	it("asks for one exact version without a channel", async () => {
-		delete process.env.PI_BUILD_URL;
+		// Fork: test the version route independently of product defaults (docs/fork/README.md).
+		process.env.PI_BUILD_URL = "https://build.test/";
 		let url = "";
 
 		await fetchBuild(
@@ -159,7 +159,7 @@ describe("fetchBuild", () => {
 			},
 		);
 
-		expect(url).toBe(`${DEFAULT_BUILD_URL}/api/products/omp/versions/18.8.9/macos-arm64`);
+		expect(url).toBe("https://build.test/api/products/omp/versions/18.8.9/macos-arm64");
 	});
 
 	it("names the target when nothing is published for it", async () => {

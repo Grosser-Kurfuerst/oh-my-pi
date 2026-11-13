@@ -13,7 +13,7 @@
  *   exact version.
  *
  * Both products are public, so no token is sent. The origin is `PI_BUILD_URL`
- * ({@link DEFAULT_BUILD_URL} when unset). `{target}` is
+ * (product-specific defaults when unset). `{target}` is
  * `{macos|linux|linux-musl|windows}-{arm64|x86_64}` ({@link resolveBuildHost}).
  * Requests carry `User-Agent: omp/<version>`, which the service counts in its
  * update-check statistics.
@@ -33,6 +33,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { $env, APP_NAME, isEnoent, isRecord, VERSION } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
+import { forkBuildServiceDefault } from "../fork/build-service";
 import {
 	isTimeoutError,
 	isUnsupportedProxyError,
@@ -44,23 +45,19 @@ export type UpdateChannel = "stable" | "canary";
 
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-/**
- * Build service origin used when `PI_BUILD_URL` is unset.
- *
- * Fork: points at the static build index on this fork's `build-index` branch,
- * so `omp update` installs the fork's own builds instead of upstream's.
- */
-export const DEFAULT_BUILD_URL = "https://raw.githubusercontent.com/Grosser-Kurfuerst/oh-my-pi/build-index";
+/** Build service origin used when `PI_BUILD_URL` is unset. */
+export const DEFAULT_BUILD_URL = "https://build.stencil.so";
 
 const BUILD_CHECK_TIMEOUT_MS = 30_000;
 
 /** Ceiling of one build file download ({@link downloadBuildFile}); a temp file older than this is abandoned. */
 export const BUILD_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 
-/** Build service origin: `PI_BUILD_URL` without trailing slashes, else {@link DEFAULT_BUILD_URL}. */
-export function buildServiceUrl(): string {
+/** Build service origin for a product, with `PI_BUILD_URL` taking precedence. */
+export function buildServiceUrl(product: BuildProduct = OMP_BUILD): string {
 	const configured = ($env.PI_BUILD_URL ?? "").trim().replace(/\/+$/, "");
-	return configured || DEFAULT_BUILD_URL;
+	// Fork: only omp updates use the fork index (docs/fork/README.md).
+	return configured || forkBuildServiceDefault(product.id, DEFAULT_BUILD_URL);
 }
 
 /** Where this host's builds live on the build service. */
@@ -280,7 +277,7 @@ export interface FetchBuildOptions {
 export async function fetchBuild(selector: BuildSelector, options: FetchBuildOptions = {}): Promise<BuildAnswer> {
 	const product = options.product ?? OMP_BUILD;
 	const host = options.host ?? (await currentBuildHost());
-	const origin = buildServiceUrl();
+	const origin = buildServiceUrl(product);
 	const timeoutMs = options.timeoutMs ?? BUILD_CHECK_TIMEOUT_MS;
 	const route =
 		"channel" in selector
