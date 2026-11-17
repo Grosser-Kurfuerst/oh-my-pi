@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [18.22.0] - 2026-11-16
+
+### Fixed
+
+- Fixed slow streaming of Gemma tool calls with large arguments.
+
+## [18.21.0] - 2026-11-16
+
+### Added
+
+- Added automatic detection of thinking capabilities for previously unknown models, with persistent results and support for alternate effort and token-budget request formats.
+
 ## [18.20.3] - 2026-11-16
 
 ### Breaking Changes
